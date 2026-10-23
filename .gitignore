@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Виртуальное окружение
+.venv/
+venv/
+
+# Состояние приложения (лежит в папке программы — портативность)
+config.json
+config.json.tmp
+markclip.log
+notes/
+
+# Сборка
+build/
+dist/
+*.spec
+
+# Системное
+.DS_Store
+Thumbs.db
