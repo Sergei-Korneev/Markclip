@@ -820,12 +820,16 @@ class SettingsWindow:
         row_text = ttk.Frame(frame)
         row_text.pack(fill="x", pady=(0, 4))
         ttk.Label(row_text, text=tr("Шаблон текста заметки:"), width=23).pack(
-            side="left"
+            side="left", anchor="n"
         )
-        self.text_template_var = tk.StringVar(value=text_template)
-        ttk.Entry(row_text, textvariable=self.text_template_var, width=44).pack(
-            side="left", fill="x", expand=True
+        # многострочное поле: шаблон тела заметки часто содержит переводы
+        # строк ({url1}\n\n{text}) — Enter вставляет строку, Ctrl+Enter сохраняет
+        self.text_template_text = tk.Text(
+            row_text, height=4, width=44, wrap="word", undo=True
         )
+        self.text_template_text.insert("1.0", text_template)
+        self.text_template_text.pack(side="left", fill="both", expand=True)
+        self.text_template_text.bind("<Return>", self._text_template_return)
 
         row5 = ttk.Frame(frame)
         row5.pack(fill="x", pady=(0, 4))
@@ -978,6 +982,26 @@ class SettingsWindow:
                 error=tr("Не удалось начать запись комбинации"),
             )
 
+    def _text_template_value(self) -> str:
+        """Содержимое многострочного поля шаблона текста одной строкой."""
+        try:
+            return self.text_template_text.get("1.0", "end-1c")
+        except tk.TclError:
+            return ""
+
+    def _text_template_return(self, event: tk.Event) -> str:
+        """Enter в поле шаблона — новая строка, Ctrl+Enter — сохранить.
+
+        ``"break"`` останавливает дальнейшую обработку, чтобы оконный
+        биндинг ``<Return>`` («сохранить настройки») не срабатывал
+        при вводе переноса строки.
+        """
+        if event.state & 0x0004:  # Control — сохранить настройки
+            self._save()
+        else:
+            event.widget.insert(tk.INSERT, "\n")
+        return "break"
+
     def _save(self) -> None:
         if self._capturing:
             return
@@ -991,7 +1015,7 @@ class SettingsWindow:
             self.name_template_var.get(),
             self.assets_var.get(),
             language,
-            self.text_template_var.get(),
+            self._text_template_value(),
         )
         if error:
             self.error_var.set(error)
