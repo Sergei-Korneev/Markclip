@@ -34,16 +34,17 @@ vault if you use one (see below).
   it behaves as before — appended to the daily `YYYY-MM-DD.md`. The file
   name follows the title automatically until you edit it by hand;
   existing files are never overwritten — a `_2` suffix is added.
-  Both fields can be pre-filled with date/time templates (see below).
+  Both fields can be pre-filled with templates — date/time, the first
+  N characters of the text, the first link (see below).
 * **Daily Markdown files** `YYYY-MM-DD.md` in the configured folder, each
   note stamped with `## HH:MM:SS`. Open them in any Markdown editor and
   sync them as plain text.
 * **Tray icon** (Linux and Windows) with a menu: open the window,
   settings, quit.
-* **Settings**: notes folder, hotkey, default title/file-name templates
-  for new notes, the attachments folder name and the interface language.
-  No need to type the shortcut as a string — the “Record shortcut”
-  button remembers whatever you press.
+* **Settings**: notes folder, hotkey, default title/file-name/note-text
+  templates for new notes, the attachments folder name and the interface
+  language. No need to type the shortcut as a string — the “Record
+  shortcut” button remembers whatever you press.
 * **Interface languages**: Russian, English and Chinese — switch them in
   settings, the whole UI changes at once (see “Languages”).
 * **Portability**: `config.json`, the `markclip.log` journal and the default
@@ -128,10 +129,21 @@ The **“Settings…”** item in the tray menu:
   empty form opens (a draft is never overwritten). Placeholders:
   `{date}` — 2026-10-23, `{time}` — 21-30-45, `{datetime}` —
   “2026-10-23 21-30-45”, a literal brace — `{{`. Leave empty to keep
-  the field blank.
+  the field blank. Text-based placeholders (`{text}`, `{text:90}`,
+  `{url1}` — see below) are applied on save, once the text is typed,
+  so they do not fill the field on open.
 * **Default file name** — a template for the “File name” field (same
-  placeholders). While the template is set, the name no longer follows
-  the title automatically.
+  placeholders, including `{text:90}` — the first 90 characters of the
+  note text; the name is normalized: forbidden characters and line
+  breaks are replaced, the edges are trimmed and the length is capped).
+  While the template is set, the name no longer follows the title
+  automatically.
+* **Note text template** — wraps the typed text on save: `{text}` is
+  where the text goes, `{url1}` — the first `http(s)://` link in it,
+  `{date}`/`{time}`/`{datetime}` — the save moment. If the template
+  has no `{text}`, the text is appended at the end. Leave empty
+  (the default) and the text is saved as-is — no time is put into
+  the note body.
 * **Attachments folder** — the name of the subfolder inside the notes
   folder where clipboard images are stored (default `assets`);
 * **Language** — the interface language: `Русский`, `English`, `中文`.
@@ -203,8 +215,9 @@ makes it a great “quick capture” companion for an
    Obsidian's own attachments folder, set “Attachments → Default location
    for new attachments” in Obsidian.
 5. The settings templates turn quick captures into ready-made pages:
-   e.g. title `Note {date}` and file name `{date} {time}` — every note
-   becomes a separate page with the date in its name.
+   e.g. title `Note {date}`, file name `{text:90}` (a name built from
+   the first 90 characters of the text) and note text `{url1}\n\n{text}` —
+   every capture is saved as a separate page with its first link on top.
 
 Tip: keep Markclip in autostart and use it as an input field for Obsidian —
 capture from any application in one keystroke, then structure and work

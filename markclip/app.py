@@ -100,6 +100,7 @@ class Markclip:
             templates_provider=lambda: (
                 self.config.title_template,
                 self.config.name_template,
+                self.config.text_template,
             ),
             assets_provider=lambda: self.config.assets_dir,
         )
@@ -301,6 +302,7 @@ class Markclip:
             hotkey=hotkey_display(self.config.hotkey),
             title_template=self.config.title_template,
             name_template=self.config.name_template,
+            text_template=self.config.text_template,
             assets_dir=self.config.assets_dir,
             language=self.config.language,
             on_save=self._save_settings,
@@ -317,6 +319,7 @@ class Markclip:
         name_template: str = "",
         assets_dir: str = "",
         language: str = "ru",
+        text_template: str = "",
     ) -> Optional[str]:
         """Применить настройки из окна. Возвращает текст ошибки или None."""
         notes_dir = (notes_dir or "").strip()
@@ -343,6 +346,7 @@ class Markclip:
         self.config.hotkey = new_hotkey
         self.config.title_template = (title_template or "").strip()
         self.config.name_template = (name_template or "").strip()
+        self.config.text_template = (text_template or "").strip()
         self.config.assets_dir = normalize_subdir(assets_dir)
         # язык применяется последним: если он сменился, открытые окна и
         # меню трея сразу перерисовываются на новом языке
@@ -353,12 +357,13 @@ class Markclip:
         if save_error:
             return save_error
         log.info(
-            "Настройки применены: папка=%s, хоткей=%s, шаблоны=%r/%r, "
+            "Настройки применены: папка=%s, хоткей=%s, шаблоны=%r/%r/%r, "
             "вложения=%s, язык=%s",
             self.config.notes_dir,
             hotkey_display(new_hotkey),
             self.config.title_template,
             self.config.name_template,
+            self.config.text_template,
             self.config.assets_dir,
             self.config.language,
         )

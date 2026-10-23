@@ -112,6 +112,7 @@ def test_config_portable() -> None:
                 hotkey="<f8>",
                 title_template="Заметка {date}",
                 name_template="{date} {time}",
+                text_template="{url1}\n\n{text}",
                 assets_dir="вложения",
                 language="zh",
             )
@@ -125,6 +126,7 @@ def test_config_portable() -> None:
             assert loaded.hotkey == "<f8>"
             assert loaded.title_template == "Заметка {date}"
             assert loaded.name_template == "{date} {time}"
+            assert loaded.text_template == "{url1}\n\n{text}"
             assert loaded.assets_dir == "вложения"
             assert loaded.language == "zh"
             # пустой язык приводится к русскому
@@ -238,7 +240,7 @@ def test_notes_named() -> None:
 
 
 def test_render_template() -> None:
-    """Подстановки {date}/{time}/{datetime} в шаблонах настроек."""
+    """Подстановки {date}/{time}/{datetime}/{text}/{text:N}/{url1}."""
     from markclip.gui import render_template
 
     now = datetime(2026, 10, 23, 21, 30, 45)
@@ -251,6 +253,79 @@ def test_render_template() -> None:
     assert render_template("", now) == ""
     # шаблон без now работает на текущем времени
     assert "{date}" not in render_template("{date}")
+
+    # подстановки по тексту заметки
+    text = "Смотри https://example.com/a/path, и ещё хвост."
+    assert render_template("{url1}", text=text) == "https://example.com/a/path"
+    assert render_template("{url1}", text="без ссылок") == ""
+    assert render_template("{text}", text="Привет\nмир") == "Привет\nмир"
+    # {text:N} — одна строка, пробелы свёрнуты, обрезка по N
+    assert render_template("{text:10}", text="Привет\nмир") == "Привет мир"
+    assert render_template("{text:5}", text="Привет\nмир") == "Приве"
+    assert render_template("{text:20}", text="короткий") == "короткий"
+    # подставленный текст повторно не разбирается
+    assert render_template("{text}", text="скобки {{ и {нет}") == "скобки {{ и {нет}"
+    # дата и текст вместе
+    assert (
+        render_template("{date} {text:5}", now, text="abcdefg") == "2026-10-23 abcde"
+    )
+
+
+def test_note_body_template() -> None:
+    """Тело заметки по шаблону: {text} — место текста, иначе — в конец."""
+    from markclip.gui import (
+        first_url,
+        has_text_placeholders,
+        render_note_body,
+    )
+
+    # пустой шаблон — текст без изменений (время в тело не добавляется)
+    assert render_note_body("", "Привет") == "Привет"
+    assert render_note_body("   ", "Привет") == "Привет"
+
+    # {text} — место текста, {url1} — первая ссылка
+    body = render_note_body(
+        "{url1}\n\n{text}", "Смотри https://example.com/x — подробно"
+    )
+    assert body == "https://example.com/x\n\nСмотри https://example.com/x — подробно"
+
+    # подстановки {text} нет — текст дописывается в конец
+    assert render_note_body("Заметка:", "мой текст") == "Заметка:\n\nмой текст"
+    dated = render_note_body("{date} {time}", "мой текст")
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\n\nмой текст$", dated)
+
+    # шаблон без текста — рендерится сам шаблон
+    only = render_note_body("{date} {time}", "")
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}$", only)
+
+    # распознавание текстовых подстановок
+    assert has_text_placeholders("{text:90}")
+    assert has_text_placeholders("{url1} и {text}")
+    assert not has_text_placeholders("{date} {time} {{x}}")
+
+    # первая ссылка: висячая пунктуация отрезается
+    assert first_url("а (https://ex.com/path), б") == "https://ex.com/path"
+    assert first_url("ссылки нет") == ""
+
+
+def test_name_from_text_template() -> None:
+    """Имя файла из {text:N}: нормализовано и не ломает файловую систему."""
+    from markclip.gui import render_template
+    from markclip.notes import sanitize_file_name, save_note_file
+
+    text = (
+        "Как настроить 1С:ERP? Читай тут https://example.com/1c/erp — "
+        "подробно.\nВторая строка с ?:*|<> и прочим мусором"
+    )
+    name = sanitize_file_name(render_template("{text:90}", text=text))
+    assert name
+    assert "\n" not in name
+    for char in '<>:"/\\|?*':
+        assert char not in name
+    with tempfile.TemporaryDirectory() as tmp:
+        path = save_note_file(Path(tmp) / "notes", text, name=name)
+        assert path is not None and path.is_file()
+        assert path.stem.startswith(name[:40])
 
 
 def test_icon() -> None:
@@ -343,6 +418,8 @@ TESTS = (
     test_notes_image,
     test_notes_named,
     test_render_template,
+    test_note_body_template,
+    test_name_from_text_template,
     test_i18n,
     test_i18n_keys,
     test_icon,

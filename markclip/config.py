@@ -72,6 +72,9 @@ class Config:
     :param title_template: шаблон заголовка новой заметки
         (подстановки `{date}`, `{time}`, `{datetime}`; пусто — не подставлять)
     :param name_template:  шаблон имени файла новой заметки (те же подстановки)
+    :param text_template: шаблон тела заметки — оборачивает введённый текст
+        при сохранении (подстановки `{text}`, `{text:90}`, `{url1}`, `{date}`
+        и т. д.; пусто — текст без изменений, время в тело не добавляется)
     :param assets_dir: имя подпапки для картинок внутри папки заметок
         (пусто — ``assets``)
     :param language: код языка интерфейса (``ru``/``en``/``zh``/…;
@@ -82,6 +85,7 @@ class Config:
     hotkey: str = DEFAULT_HOTKEY
     title_template: str = ""
     name_template: str = ""
+    text_template: str = ""
     assets_dir: str = ""
     language: str = "ru"
 
@@ -130,6 +134,7 @@ class Config:
                 "hotkey",
                 "title_template",
                 "name_template",
+                "text_template",
                 "assets_dir",
                 "language",
             )

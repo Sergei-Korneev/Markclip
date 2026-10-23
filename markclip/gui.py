@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -27,30 +28,104 @@ _ERROR_COLOR = "#b00020"
 _MUTED_COLOR = "#666666"
 
 
-def render_template(template: str, now: Optional["datetime"] = None) -> str:
-    """Подставить в шаблон дату/время.
+#: Токены шаблона: ``{{``/``}}`` (литеральные скобки) и ``{имя}``/``{имя:N}``
+#: с известными именами; всё остальное остаётся как есть.
+_TOKEN_RE = re.compile(
+    r"\{\{|\}\}|\{(date|time|datetime|text|url1)(?::(\d+))?\}"
+)
 
-    Подстановки: ``{date}`` — ГГГГ-ММ-ДД, ``{time}`` — ЧЧ-ММ-СС,
-    ``{datetime}`` — «ГГГГ-ММ-ДД ЧЧ-ММ-СС». Литеральная фигурная скобка
-    удваивается: ``{{``. Неизвестные подстановки остаются как есть,
-    кривой шаблон не приводит к ошибке.
+#: Подстановки, которым нужен введённый текст заметки (применяются
+#: только при сохранении — при открытии формы текста ещё нет).
+_TEXT_PLACEHOLDER_RE = re.compile(r"\{text(?::\d+)?\}|\{url1\}")
+
+#: Первая ссылка в тексте (без висячей пунктуации в конце).
+_URL_RE = re.compile(r"https?://[^\s<>'\"()\[\]{}]+")
+
+
+def first_url(text: str) -> str:
+    """Первая ссылка ``http(s)://…`` в тексте; ссылки нет — пустая строка."""
+    match = _URL_RE.search(text or "")
+    if not match:
+        return ""
+    return match.group(0).rstrip(".,;:!?…")
+
+
+def has_text_placeholders(template: str) -> bool:
+    """Есть ли в шаблоне подстановки, зависящие от текста заметки."""
+    return bool(_TEXT_PLACEHOLDER_RE.search(template or ""))
+
+
+def _text_snippet(text: str, limit: Optional[int]) -> str:
+    """Фрагмент текста для подстановки: пробелы → один пробел, обрезка."""
+    flat = " ".join((text or "").split())
+    return flat[:limit] if limit else flat
+
+
+def render_template(
+    template: str, now: Optional["datetime"] = None, text: str = ""
+) -> str:
+    """Подставить в шаблон дату/время и подстановки по тексту заметки.
+
+    Подстановки даты/времени: ``{date}`` — ГГГГ-ММ-ДД, ``{time}`` — ЧЧ-ММ-СС,
+    ``{datetime}`` — «ГГГГ-ММ-ДД ЧЧ-ММ-СС».
+
+    Подстановки по тексту (нужен аргумент ``text``): ``{text}`` — весь текст,
+    ``{text:90}`` — первые 90 символов (пробелы сворачиваются в один),
+    ``{url1}`` — первая ссылка ``http(s)://`` в тексте.
+
+    Литеральная фигурная скобка удваивается: ``{{``. Неизвестные
+    подстановки остаются как есть, кривой шаблон не приводит к ошибке.
+    Подставляемый текст повторно не разбирается — фигурные скобки
+    внутри него доходят до результата как есть.
     """
     moment = now or datetime.now()
+    source = template or ""
     values = {
         "date": moment.strftime("%Y-%m-%d"),
         "time": moment.strftime("%H-%M-%S"),
         "datetime": moment.strftime("%Y-%m-%d %H-%M-%S"),
+        "url1": first_url(text),
     }
 
-    class _KeepUnknown(dict):
-        def __missing__(self, key):  # noqa: N802 — имя диктовки
-            return "{" + key + "}"
+    parts = []
+    position = 0
+    for match in _TOKEN_RE.finditer(source):
+        parts.append(source[position : match.start()])
+        position = match.end()
+        token = match.group(0)
+        if token == "{{":
+            parts.append("{")
+            continue
+        if token == "}}":
+            parts.append("}")
+            continue
+        name, limit = match.group(1), match.group(2)
+        if name == "text":
+            parts.append(
+                (text or "") if limit is None else _text_snippet(text, int(limit))
+            )
+        else:
+            parts.append(values[name])
+    parts.append(source[position:])
+    return "".join(parts)
 
-    try:
-        return (template or "").format_map(_KeepUnknown(**values))
-    except (ValueError, IndexError):
-        log.debug("Шаблон %r не разобран, оставляю как есть", template)
-        return template or ""
+
+def render_note_body(template: str, text: str) -> str:
+    """Собрать тело заметки по шаблону (применяется при сохранении).
+
+    ``{text}`` в шаблоне — место текста. Если подстановки нет, введённый
+    текст дописывается в конец отрендеренного шаблона. Пустой шаблон —
+    текст возвращается без изменений.
+    """
+    if not (template or "").strip():
+        return text or ""
+    rendered = render_template(template, text=text).strip("\n")
+    body = (text or "").strip("\n")
+    if not body:
+        return rendered
+    if re.search(r"\{text(:\d+)?\}", template or ""):
+        return rendered
+    return "{}\n\n{}".format(rendered, body) if rendered else body
 
 
 class NoteWindow:
@@ -65,8 +140,11 @@ class NoteWindow:
         для сохранения картинок, вставленных через Ctrl+V. Если не задан,
         картинки вставить нельзя (сообщается в строке статуса).
     :param templates_provider: возвращает ``(шаблон заголовка,
-        шаблон имени файла)`` для подстановки в пустую форму новой
-        заметки; если не задан — поля открываются пустыми.
+        шаблон имени файла, шаблон текста заметки)``. Шаблоны только
+        с датой/временем заполняют поля при открытии пустой формы;
+        шаблоны с ``{text…}``/``{url1}`` применяются при сохранении
+        (см. :func:`render_template`), а шаблон текста — всегда
+        при сохранении. Если не задан — поля открываются пустыми.
     :param assets_provider: возвращает текущее имя подпапки вложений
         для картинок из буфера; если не задан — ``assets``.
     """
@@ -76,7 +154,7 @@ class NoteWindow:
         root: tk.Tk,
         on_submit: Callable[[str, str, str], Optional[str]],
         notes_dir_provider: Optional[Callable[[], Optional[Path]]] = None,
-        templates_provider: Optional[Callable[[], Tuple[str, str]]] = None,
+        templates_provider: Optional[Callable[[], Tuple[str, str, str]]] = None,
         assets_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self.root = root
@@ -92,8 +170,13 @@ class NoteWindow:
         # последнее имя, подставленное автоматически из заголовка: пока
         # пользователь не правит имя вручную, оно следует за заголовком
         self._auto_name = ""
-        # непустой шаблон имени отключает следование имени за заголовком
+        # текущие шаблоны настроек (заполняются при открытии формы);
+        # шаблоны с подстановками по тексту применяются при сохранении
+        self._title_template = ""
         self._name_template = ""
+        self._text_template = ""
+        self._deferred_title = False
+        self._deferred_name = False
         # поле, под которым открылось контекстное меню
         self._context_target: Optional[tk.Widget] = None
         # защита от повторного Ctrl+V, пока читается буфер обмена
@@ -209,27 +292,34 @@ class NoteWindow:
         """Подставить шаблонные заголовок/имя в пустую форму новой заметки.
 
         Черновик (непустые поля) не трогается: шаблоны действуют только
-        при открытии пустой формы.
+        при открытии пустой формы. Шаблоны с ``{text…}``/``{url1}``
+        не заполняют поле — они вычисляются при сохранении, когда текст
+        уже введён; соответствующие флаги запоминаются для :meth:`submit`.
         """
-        try:
-            if self.title_var.get().strip() or self.name_var.get().strip():
-                return  # это черновик — его не перезаписываем
-        except tk.TclError:
-            return
         if not self.templates_provider:
             return
         try:
-            title_template, name_template = self.templates_provider()
+            title_template, name_template, text_template = (
+                self.templates_provider()
+            )
         except Exception:  # noqa: BLE001
             log.debug("Шаблоны недоступны", exc_info=True)
             return
+        # шаблоны читаем всегда — submit должен применять актуальные
+        self._title_template = (title_template or "").strip()
         self._name_template = (name_template or "").strip()
+        self._text_template = (text_template or "").strip()
+        self._deferred_title = has_text_placeholders(self._title_template)
+        self._deferred_name = has_text_placeholders(self._name_template)
         try:
-            if (title_template or "").strip():
-                self.title_var.set(render_template(title_template))
+            if self.title_var.get().strip() or self.name_var.get().strip():
+                return  # это черновик — его не перезаписываем
+            if self._title_template and not self._deferred_title:
+                self.title_var.set(render_template(self._title_template))
             if self._name_template:
-                self.name_var.set(render_template(self._name_template))
-                self._auto_name = self.name_var.get()
+                if not self._deferred_name:
+                    self.name_var.set(render_template(self._name_template))
+                    self._auto_name = self.name_var.get()
             elif self.title_var.get().strip():
                 # шаблона имени нет — имя, как обычно, следует за заголовком
                 self._auto_name = sanitize_file_name(self.title_var.get())
@@ -511,10 +601,17 @@ class NoteWindow:
                 self.text.focus_set()
                 return
             content = self._fix_image_refs(content)
+        # шаблоны с {text…}/{url1} применяются здесь — текст уже введён
+        title = self.title_var.get()
+        name = self.name_var.get()
+        if self._deferred_title and self._title_template and not title.strip():
+            title = render_template(self._title_template, text=content).strip()
+        if self._deferred_name and self._name_template and not name.strip():
+            name = render_template(self._name_template, text=content)
+        if self._text_template:
+            content = render_note_body(self._text_template, content)
         try:
-            error = self.on_submit(
-                content, self.title_var.get(), self.name_var.get()
-            )
+            error = self.on_submit(content, title, name)
         except Exception:  # noqa: BLE001 — не ронять UI из-за ошибки сохранения
             log.exception("Ошибка сохранения заметки")
             error = tr("Внутренняя ошибка сохранения (подробности в журнале)")
@@ -628,8 +725,8 @@ class SettingsWindow:
     """Окно настроек: папка, хоткей, шаблоны, вложения, язык интерфейса.
 
     :param on_save: ``(notes_dir, hotkey_text, title_template, name_template,
-        assets_dir, language) -> Optional[str]`` — ошибка или ``None``, если
-        настройки применены (окно закрывается).
+        assets_dir, language, text_template) -> Optional[str]`` — ошибка или
+        ``None``, если настройки применены (окно закрывается).
     :param on_capture: начать запись комбинации клавиш из поля хоткея.
     :param on_close: окно закрыто (сюда приложение подчищает ссылку).
     """
@@ -642,9 +739,10 @@ class SettingsWindow:
         hotkey: str,
         title_template: str = "",
         name_template: str = "",
+        text_template: str = "",
         assets_dir: str = "",
         language: str = "ru",
-        on_save: Callable[[str, str, str, str, str, str], Optional[str]],
+        on_save: Callable[[str, str, str, str, str, str, str], Optional[str]],
         on_capture: Callable[[], None],
         on_close: Callable[[], None],
     ) -> None:
@@ -719,6 +817,16 @@ class SettingsWindow:
             side="left", fill="x", expand=True
         )
 
+        row_text = ttk.Frame(frame)
+        row_text.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_text, text=tr("Шаблон текста заметки:"), width=23).pack(
+            side="left"
+        )
+        self.text_template_var = tk.StringVar(value=text_template)
+        ttk.Entry(row_text, textvariable=self.text_template_var, width=44).pack(
+            side="left", fill="x", expand=True
+        )
+
         row5 = ttk.Frame(frame)
         row5.pack(fill="x", pady=(0, 4))
         ttk.Label(row5, text=tr("Папка вложений:"), width=23).pack(side="left")
@@ -731,9 +839,13 @@ class SettingsWindow:
             frame,
             text=tr(
                 "Шаблоны подставляются в поля новой заметки. Подстановки: "
-                "{date} — 2026-10-23, {time} — 21-30-45,\n"
-                "{datetime} — «2026-10-23 21-30-45»; литеральная скобка — {{ . "
-                "Пустой шаблон — поле остаётся пустым.\n"
+                "{date} — 2026-10-23, {time} — 21-30-45, "
+                "{datetime} — «2026-10-23 21-30-45»; литеральная скобка — {{ .\n"
+                "Подстановки по тексту ({text}, {text:90} — первые 90 символов, "
+                "{url1} — первая ссылка в тексте) применяются при сохранении.\n"
+                "Шаблон текста заметки оборачивает введённый текст: "
+                "{text} — сам текст; без него текст дописывается в конец. "
+                "Пустой шаблон — текст без изменений.\n"
                 "Папка вложений — имя подпапки внутри папки заметок для картинок "
                 "из буфера (по умолчанию assets)."
             ),
@@ -879,6 +991,7 @@ class SettingsWindow:
             self.name_template_var.get(),
             self.assets_var.get(),
             language,
+            self.text_template_var.get(),
         )
         if error:
             self.error_var.set(error)
