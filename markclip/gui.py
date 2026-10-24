@@ -102,6 +102,62 @@ _NAME_SKIP_KEYSYMS = frozenset(
 )
 
 
+def combobox_listbox(widget) -> Optional[str]:
+    """Путь listbox'а раскрытого списка комбинированного поля.
+
+    Список закрыт (или это не комбинированное поле) — ``None``.
+    """
+    try:
+        popdown = widget.tk.eval("ttk::combobox::PopdownWindow " + str(widget))
+        if widget.tk.call("winfo", "viewable", popdown) != 1:
+            return None
+        return popdown + ".f.l"
+    except tk.TclError:
+        return None
+
+
+def close_combobox(widget) -> None:
+    """Закрыть список комбинированного поля (безопасно, если закрыт)."""
+    try:
+        widget.tk.call("ttk::combobox::Unpost", str(widget))
+    except tk.TclError:
+        pass
+
+
+def bind_combobox_toggle(widget) -> None:
+    """Клик по стрелке переключает список: открыт — закрыть.
+
+    В ttk::combobox стрелка только открывает список (``Press`` всегда
+    вызывает ``Post``) — повторный клик ничего не закрывает. Здесь это
+    чинится: раскрытый список закрывается, штатное открытие остаётся.
+    Клик по тексту редактируемого поля не перехватывается (работает
+    курсор), у поля только для чтения клик в любом месте — переключатель.
+
+    Заодно ``<Map>`` списка отпускает grab, который берёт
+    ``ttk::combobox::Post``: с этим grab'ом нельзя печатать в других
+    полях окна, пока список раскрыт.
+    """
+    widget.bind_class(
+        "ComboboxListbox",
+        "<Map>",
+        "after idle {catch {ttk::releaseGrab [winfo toplevel %W]}}",
+    )
+
+    def on_click(event):
+        try:
+            element = widget.identify(event.x, event.y) or ""
+            if widget.instate(["!readonly"]) and "textarea" in element:
+                return None  # штатная работа с текстом и курсором
+        except tk.TclError:
+            return None
+        if combobox_listbox(widget) is not None:
+            close_combobox(widget)
+            return "break"  # штатный Press не вызываем — список уже закрыт
+        return None
+
+    widget.bind("<Button-1>", on_click)
+
+
 def filter_name_choices(choices: list, needle: str) -> list:
     """Отфильтровать имена файлов по подстроке (без учёта регистра).
 
@@ -410,16 +466,9 @@ class NoteWindow:
         self.name_entry.bind("<Key-Down>", self._on_name_down)
         self.name_entry.bind("<Key-Up>", self._on_name_up)
         self.name_entry.bind("<Key-Return>", self._on_name_return)
-        # список открывается по стрелке в поле, набору букв или Down;
-        # его <Map> по умолчанию делает focus -force на себя и берёт grab —
-        # тогда печатать в окне нельзя. Отпускаем grab сразу после раскрытия
-        # и оставляем ввод тому, у кого он был: набирать имя файла или текст
-        # заметки можно и при открытом списке
-        self.name_entry.bind_class(
-            "ComboboxListbox",
-            "<Map>",
-            "after idle {catch {ttk::releaseGrab [winfo toplevel %W]}}",
-        )
+        # стрелка переключает список (открыть/закрыть), grab списка
+        # отпускается — печатать можно и при раскрытом списке
+        bind_combobox_toggle(self.name_entry)
 
         self.label_text = ttk.Label(outer, text=tr("Текст заметки:"))
         self.label_text.pack(anchor="w")
@@ -583,15 +632,7 @@ class NoteWindow:
 
     def _name_listbox(self) -> Optional[str]:
         """Путь listbox'а раскрытого списка файлов; список закрыт — ``None``."""
-        try:
-            popdown = self.name_entry.tk.eval(
-                "ttk::combobox::PopdownWindow " + str(self.name_entry)
-            )
-            if self.name_entry.tk.call("winfo", "viewable", popdown) != 1:
-                return None
-            return popdown + ".f.l"
-        except tk.TclError:
-            return None
+        return combobox_listbox(self.name_entry)
 
     def _open_name_choices(self) -> None:
         """Раскрыть список файлов (grab отпускает биндинг <Map>)."""
@@ -677,12 +718,7 @@ class NoteWindow:
     def _close_name_choices(self, _event=None) -> None:
         """Закрыть список файлов (безопасно, если он уже закрыт)."""
         self._name_choice_index = -1
-        try:
-            self.name_entry.tk.call(
-                "ttk::combobox::Unpost", str(self.name_entry)
-            )
-        except tk.TclError:
-            pass
+        close_combobox(self.name_entry)
 
     def _on_name_selected(self, _event=None) -> None:
         """Выбор файла из списка — фокус в текст, чтобы дописывать заметку."""
@@ -1382,13 +1418,15 @@ class SettingsWindow:
         self.link_style_var = tk.StringVar(
             value=self._style_to_name.get(link_style, self._style_to_name["plain"])
         )
-        ttk.Combobox(
+        self.link_style_combo = ttk.Combobox(
             row_link,
             textvariable=self.link_style_var,
             values=list(self._style_to_name.values()),
             state="readonly",
             width=42,
-        ).pack(side="left", fill="x", expand=True)
+        )
+        self.link_style_combo.pack(side="left", fill="x", expand=True)
+        bind_combobox_toggle(self.link_style_combo)
 
         ttk.Label(
             frame,
@@ -1428,6 +1466,7 @@ class SettingsWindow:
             width=41,
         )
         self.language_combo.pack(side="left", fill="x", expand=True)
+        bind_combobox_toggle(self.language_combo)
 
         self.error_var = tk.StringVar(value="")
         ttk.Label(
