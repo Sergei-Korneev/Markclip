@@ -256,18 +256,27 @@ class Markclip:
     # Сохранение заметки
     # ------------------------------------------------------------------
     def _submit_note(
-        self, text: str, title: str = "", name: str = ""
+        self,
+        text: str,
+        title: str = "",
+        name: str = "",
+        overwrite: bool = False,
     ) -> Optional[str]:
         """Сохранить заметку: именованным файлом или в дневной файл.
 
         Заполненные заголовок/имя — отдельный файл ``<имя>.md``
         (заголовок — первой строкой ``# ...``); оба пуста — привычное
-        дополнение в дневной ``ГГГГ-ММ-ДД.md``.
+        дополнение в дневной ``ГГГГ-ММ-ДД.md``. ``overwrite=True`` —
+        заметка взята из списка существующих и переписывается целиком.
         """
         try:
             if (title or "").strip() or (name or "").strip():
                 path = save_note_file(
-                    self.config.notes_path, text, title=title, name=name
+                    self.config.notes_path,
+                    text,
+                    title=title,
+                    name=name,
+                    overwrite=overwrite,
                 )
             else:
                 path = save_note(text, self.config.notes_path)

@@ -590,6 +590,35 @@ def test_reserved_names() -> None:
             assert path.read_text(encoding="utf-8") == "text\n"
 
 
+def test_note_edit_flow() -> None:
+    """Выбор заметки из списка: разбор заголовка и перезапись файла."""
+    from markclip.notes import save_note_file, split_note_title
+
+    # заголовок # ... уходит отдельно, тело отдельно; ## — не заголовок
+    assert split_note_title("# My note\n\nbody text\n") == ("My note", "body text\n")
+    assert split_note_title("## stamp\n\nbody") == ("", "## stamp\n\nbody")
+    assert split_note_title("just text") == ("", "just text")
+    assert split_note_title("") == ("", "")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        path = save_note_file(base, "first version", title="Note", name="note")
+
+        # перезапись: содержимое заменяется целиком, без суффикса _2
+        path2 = save_note_file(
+            base, "second version", title="Note 2", name="note", overwrite=True
+        )
+        assert path2 == path == base / "note.md"
+        assert path.read_text(encoding="utf-8") == "# Note 2\n\nsecond version\n"
+
+        # без overwrite — прежний сценарий: дописывание в конец
+        save_note_file(base, "third", title="Note 3", name="note")
+        assert (
+            path.read_text(encoding="utf-8")
+            == "# Note 2\n\nsecond version\n\nthird\n"
+        )
+
+
 TESTS = (
     test_hotkey_normalize,
     test_hotkey_display,
@@ -605,6 +634,7 @@ TESTS = (
     test_assets_dir_template,
     test_name_autocomplete,
     test_reserved_names,
+    test_note_edit_flow,
     test_i18n,
     test_i18n_keys,
     test_icon,

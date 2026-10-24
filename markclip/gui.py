@@ -24,6 +24,7 @@ from .notes import (
     render_assets_dir,
     sanitize_file_name,
     save_note_image,
+    split_note_title,
 )
 
 log = logging.getLogger(__name__)
@@ -372,11 +373,12 @@ def render_note_body(template: str, text: str) -> str:
 class NoteWindow:
     """Окно с полями заголовка, имени файла, текстом и кнопкой ОК.
 
-    :param on_submit: ``(text, title, name) -> Optional[str]`` — вызывается
-        при ОК; возвращает ``None`` при успехе или сообщение об ошибке —
-        тогда окно остаётся открытым. Заполненные заголовок/имя означают
-        сохранение отдельным файлом; пустые — привычное дополнение
-        в дневной файл.
+    :param on_submit: ``(text, title, name, overwrite) -> Optional[str]`` —
+        вызывается при ОК; возвращает ``None`` при успехе или сообщение
+        об ошибке — тогда окно остаётся открытым. Заполненные
+        заголовок/имя означают сохранение отдельным файлом; пустые —
+        привычное дополнение в дневной файл. ``overwrite=True`` — заметка
+        взята из списка существующих и переписывается новым содержимым.
     :param notes_dir_provider: возвращает текущую папку заметок; нужен
         для сохранения картинок, вставленных через Ctrl+V. Если не задан,
         картинки вставить нельзя (сообщается в строке статуса).
@@ -393,7 +395,7 @@ class NoteWindow:
     def __init__(
         self,
         root: tk.Tk,
-        on_submit: Callable[[str, str, str], Optional[str]],
+        on_submit: Callable[[str, str, str, bool], Optional[str]],
         notes_dir_provider: Optional[Callable[[], Optional[Path]]] = None,
         templates_provider: Optional[Callable[[], Tuple[str, str, str]]] = None,
         assets_provider: Optional[Callable[[], str]] = None,
@@ -416,6 +418,9 @@ class NoteWindow:
         # список существующих имён файлов для автопоиска в поле имени
         self._name_choices: list = []
         self._name_choice_index = -1
+        # заметка взята из списка существующих: её содержимое подгружено
+        # в окно и при сохранении переписывается новым текстом
+        self._editing_stem = ""
         # последнее имя, подставленное автоматически из заголовка: пока
         # пользователь не правит имя вручную, оно следует за заголовком
         self._auto_name = ""
@@ -721,13 +726,54 @@ class NoteWindow:
         close_combobox(self.name_entry)
 
     def _on_name_selected(self, _event=None) -> None:
-        """Выбор файла из списка — фокус в текст, чтобы дописывать заметку."""
-        log.debug("Из списка выбран файл %r", self.name_var.get())
+        """Выбор файла из списка — подгружаем заметку, фокус в текст."""
+        stem = self.name_var.get()
+        log.debug("Из списка выбран файл %r", stem)
+        self._load_note_for_edit(stem)
         try:
             self.text.focus_force()
         except tk.TclError:
             log.debug("Фокус в текст не перешёл", exc_info=True)
         self.name_entry.after_idle(self._close_name_choices)
+
+    def _load_note_for_edit(self, stem: str) -> None:
+        """Подгрузить содержимое заметки в окно (файл открыт на правку).
+
+        Заголовок ``# ...`` уходит в поле «Заголовок», остальное — в текст;
+        при сохранении файл переписывается новым содержимым
+        (:meth:`submit`). Файл исчез или не читается — просто имя,
+        сохранение пойдёт обычным путём.
+        """
+        notes_dir = (
+            self.notes_dir_provider() if self.notes_dir_provider else None
+        )
+        path = (Path(notes_dir) / (stem + ".md")) if notes_dir else None
+        if path is None or not path.is_file():
+            self._editing_stem = ""
+            return
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            log.exception("Не удалось прочитать заметку %s", path)
+            self._editing_stem = ""
+            return
+        title, body = split_note_title(raw)
+        # краевые переводы строк при записи срезаются — и в поле они не нужны
+        body = body.strip("\n")
+        try:
+            self.title_var.set(title)
+            self.text.delete("1.0", "end")
+            self.text.insert("1.0", body)
+        except tk.TclError:
+            log.debug("Не удалось подгрузить заметку в форму", exc_info=True)
+            self._editing_stem = ""
+            return
+        # незаписанные вложения были под другой текст — они больше не нужны
+        self._pending_images.clear()
+        self._pending_files.clear()
+        self._preview_photos.clear()
+        self._editing_stem = stem
+        log.debug("Заметка %r подгружена в окно на правку", stem)
 
     def _apply_templates(self) -> None:
         """Подставить шаблонные заголовок/имя в пустую форму новой заметки.
@@ -1123,8 +1169,11 @@ class NoteWindow:
             content = self._fix_attachment_refs(content)
         if self._text_template:
             content = render_note_body(self._text_template, content)
+        # заметка взята из списка существующих и имя не меняли —
+        # файл переписывается новым содержимым, а не дополняется
+        overwrite = bool(self._editing_stem) and name.strip() == self._editing_stem
         try:
-            error = self.on_submit(content, title, name)
+            error = self.on_submit(content, title, name, overwrite)
         except Exception:  # noqa: BLE001 — не ронять UI из-за ошибки сохранения
             log.exception("Ошибка сохранения заметки")
             error = tr("Внутренняя ошибка сохранения (подробности в журнале)")
@@ -1137,6 +1186,7 @@ class NoteWindow:
         self._pending_files.clear()
         self._preview_photos.clear()
         self._renamed.clear()
+        self._editing_stem = ""
         self.text.delete("1.0", "end")
         try:
             self.title_var.set("")

@@ -11,7 +11,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 from .i18n import tr
 
@@ -31,6 +31,7 @@ __all__ = [
     "normalize_subdir",
     "render_assets_dir",
     "sanitize_file_name",
+    "split_note_title",
     "open_folder",
 ]
 
@@ -158,11 +159,26 @@ def sanitize_file_name(name: str) -> str:
     return cleaned.strip().strip(". ")[:100]
 
 
+def split_note_title(raw: str) -> Tuple[str, str]:
+    """Разобрать заметку на заголовок ``# ...`` и тело (для редактирования).
+
+    Первая строка вида ``# Заголовок`` (не ``##``) уходит в поле
+    «Заголовок», остальное — в текст заметки. Без заголовка весь
+    текст остаётся в теле.
+    """
+    text = raw or ""
+    first, _sep, rest = text.partition("\n")
+    if first.startswith("# ") and not first.startswith("## "):
+        return first[2:].strip(), rest.lstrip("\n")
+    return "", text
+
+
 def save_note_file(
     notes_dir: PathLike,
     text: str,
     title: str = "",
     name: str = "",
+    overwrite: bool = False,
 ) -> Optional[Path]:
     """Сохранить заметку отдельным файлом с заданными заголовком и именем.
 
@@ -170,11 +186,13 @@ def save_note_file(
     строкой как ``# ...``. Имя берётся из ``name``, иначе из ``title``,
     иначе — метка времени.
 
-    Если заданное имя совпадает с уже существующим файлом, текст
-    **дописывается в конец** этого файла — так из окна заметки можно
-    продолжить существующую заметку (заголовок при этом не повторяется).
-    Имя, выведенное из заголовка/времени, чужой файл не трогает —
-    добавляется суффикс (``_2``, ``_3``…), перезаписи нет.
+    Если заданное имя совпадает с уже существующим файлом:
+    ``overwrite=True`` — файл **переписывается** новым содержимым
+    (заметка открыта на редактирование), иначе текст **дописывается
+    в конец** — так из окна заметки можно продолжить заметку
+    (заголовок при этом не повторяется). Имя, выведенное из
+    заголовка/времени, чужой файл не трогает — добавляется
+    суффикс (``_2``, ``_3``…), перезаписи нет.
 
     Возвращает путь к файлу или ``None``, если нет ни текста, ни заголовка.
     """
@@ -197,7 +215,18 @@ def save_note_file(
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (stem + ".md")
 
+    parts = []
+    if clean_title:
+        parts.append("# {}".format(clean_title))
+    if content:
+        parts.append(content)
+
     if path.exists() and explicit_name:
+        if overwrite:
+            # заметка открыта на редактирование — переписываем целиком
+            path.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+            log.debug("Заметка переписана: %s", path)
+            return path
         # явное имя совпало с существующим файлом — дописываем текст в конец
         if content:
             with path.open("a", encoding="utf-8") as handle:
@@ -210,11 +239,6 @@ def save_note_file(
         path = directory / "{}_{}.md".format(stem, counter)
         counter += 1
 
-    parts = []
-    if clean_title:
-        parts.append("# {}".format(clean_title))
-    if content:
-        parts.append(content)
     path.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
     log.debug("Именованная заметка записана в %s", path)
     return path

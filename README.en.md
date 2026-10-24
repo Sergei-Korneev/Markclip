@@ -45,9 +45,12 @@ vault if you use one (see below).
   from the first match (the tail is selected — keep typing to replace
   it), `Down`/`Up` walk through the files, `Enter` takes the highlighted
   one. The field’s arrow shows the whole list; it closes on `Esc`, when
-  the note text is typed, or when nothing matches. Pick a file and the
-  new text is **appended to its
-  end** — an easy way to continue any note. A new name creates a file,
+  the note text is typed, or when nothing matches. Pick a file and its
+  content is loaded into the window (the `# ...` heading goes to the
+  “Title” field) — saving **rewrites the note with the new text**. If
+  the name of an existing file is typed by hand or comes from a
+  template, the new text is appended to its end. A new name creates a
+  file,
   while a name derived from an empty field (title or timestamp) never
   touches foreign files — a `_2` suffix is added on collision.
   Both fields can be pre-filled with templates — date/time, the first
