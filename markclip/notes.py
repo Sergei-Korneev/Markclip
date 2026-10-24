@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,10 +19,13 @@ log = logging.getLogger(__name__)
 
 __all__ = [
     "IMAGES_SUBDIR",
+    "LINK_STYLES",
     "save_note",
     "save_note_file",
     "save_note_image",
     "attach_note_file",
+    "attachment_dest",
+    "escape_link_text",
     "sanitize_file_name",
     "normalize_subdir",
     "open_folder",
@@ -34,6 +38,52 @@ IMAGES_SUBDIR = "assets"
 
 #: Символы, запрещённые в именах файлов на Windows (на Linux/macOS — лишнее).
 _FORBIDDEN_NAME_CHARS = '<>:"/\\|?*'
+
+#: Символы, ломающие Markdown-ссылку или URL: в имени вложения их быть
+#: не должно — ``[текст](assets/файл)`` с такими именами не откроется.
+_LINK_UNSAFE_CHARS = "[]()#%"
+
+
+#: Стили ссылок на вложения в настройках: обычные и в угловых скобках
+#: (``[текст](<путь>)`` — пробелы и скобки в имени файла не ломают ссылку).
+LINK_STYLES = ("plain", "angle")
+
+
+def escape_link_text(text: str) -> str:
+    """Экранировать квадратные скобки в тексте Markdown-ссылки.
+
+    В ``[имя файла](assets/файл)`` имя с ``[``/``]`` разрывает ссылку;
+    обратный слэш перед скобкой решает это во всех парсерах.
+    """
+    return (text or "").replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def attachment_dest(path: str, link_style: str = "plain") -> str:
+    """Пункт назначения Markdown-ссылки на вложение.
+
+    ``plain`` — путь как есть (имя файла очищено от спецсимволов),
+    ``angle`` — путь в угловых скобках, тогда пробелы и скобки в имени
+    файла допустимы: ``[текст](<assets/мой файл (1).pdf>)``.
+    """
+    if link_style == "angle":
+        return "<{}>".format(path)
+    return path
+
+
+def _safe_attachment_stem(name: str, link_style: str = "plain") -> str:
+    """Имя вложения без символов, ломающих ссылки и файловую систему.
+
+    В обычном стиле скобки ``()[]``, решётка и процент заменяются на
+    подчёркивания; в стиле с угловыми скобками они допустимы и остаются,
+    убираются только ломающие URL ``#``/``%``. Пробелы сохраняются всегда,
+    дубли подчёркиваний схлопываются.
+    """
+    cleaned = sanitize_file_name(name or "")
+    unsafe = "#%" if link_style == "angle" else _LINK_UNSAFE_CHARS
+    for char in unsafe:
+        cleaned = cleaned.replace(char, "_")
+    cleaned = re.sub(r"_{2,}", "_", cleaned).strip(". ")
+    return cleaned or datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
 #: Имена, зарезервированные Windows (к ним нельзя обращаться как к файлу).
 _RESERVED_STEMS = frozenset(
@@ -163,14 +213,19 @@ def normalize_subdir(subdir: str) -> str:
 
 
 def attach_note_file(
-    notes_dir: PathLike, source: PathLike, subdir: str = ""
+    notes_dir: PathLike,
+    source: PathLike,
+    subdir: str = "",
+    link_style: str = "plain",
 ) -> Optional[str]:
     """Скопировать файл в ``<notes_dir>/<subdir>`` как вложение заметки.
 
-    Имя файла сохраняется (символы вычищаются), при совпадении добавляется
-    суффикс (``_2``, ``_3``…) — чужие файлы не перезаписываются. Возвращает
-    относительный путь вида ``assets/договор.pdf`` для Markdown-ссылки
-    или ``None``, если файла нет.
+    Имя файла сохраняется, но очищается от символов, ломающих ссылки
+    (в обычном стиле — скобки и решётка; в стиле ``angle`` — только
+    ломающие URL ``#``/``%``, см. :func:`attachment_dest`). При совпадении
+    добавляется суффикс (``_2``, ``_3``…) — чужие файлы не перезаписываются.
+    Возвращает относительный путь вида ``assets/договор.pdf`` для
+    Markdown-ссылки или ``None``, если файла нет.
     """
     src = Path(source).expanduser()
     if not src.is_file():
@@ -180,9 +235,7 @@ def attach_note_file(
     directory = Path(notes_dir).expanduser() / clean_subdir
     directory.mkdir(parents=True, exist_ok=True)
 
-    stem = sanitize_file_name(src.stem)
-    if not stem:
-        stem = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    stem = _safe_attachment_stem(src.stem, link_style)
     if stem.split(".")[0].upper() in _RESERVED_STEMS:
         stem = "_" + stem  # Windows не даёт файлы вида CON.pdf, AUX.pdf…
     suffix = src.suffix.lower()

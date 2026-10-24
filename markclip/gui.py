@@ -17,6 +17,8 @@ from .i18n import available_languages, language_name, tr
 from .notes import (
     IMAGES_SUBDIR,
     attach_note_file,
+    attachment_dest,
+    escape_link_text,
     normalize_subdir,
     sanitize_file_name,
     save_note_image,
@@ -214,12 +216,14 @@ class NoteWindow:
         notes_dir_provider: Optional[Callable[[], Optional[Path]]] = None,
         templates_provider: Optional[Callable[[], Tuple[str, str, str]]] = None,
         assets_provider: Optional[Callable[[], str]] = None,
+        link_style_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self.root = root
         self.on_submit = on_submit
         self.notes_dir_provider = notes_dir_provider
         self.templates_provider = templates_provider
         self.assets_provider = assets_provider
+        self.link_style_provider = link_style_provider
         # картинки, вставленные, но ещё не сохранённые на диск:
         # (имя файла, PNG-байты) — файлы пишутся только по ОК
         self._pending_images: list = []
@@ -491,22 +495,28 @@ class NoteWindow:
             log.debug("Бросили файлы, но папка заметок не выбрана")
             return
         subdir = self._assets_subdir()
+        style = self._link_style()
         links = []
         for path in parse_drop_paths(getattr(event, "data", "")):
-            relative = attach_note_file(notes_dir, path, subdir)
+            relative = attach_note_file(notes_dir, path, subdir, style)
             if not relative:
                 log.debug("Брошенный файл пропущен: %s", path)
                 continue
             log.debug("Брошенный файл %s → вложение %s", path, relative)
             source = Path(path)
+            dest = attachment_dest(relative, style)
             if source.suffix.lower().lstrip(".") in IMAGE_EXTENSIONS:
-                links.append("\n![{}]({})\n".format(tr("изображение"), relative))
+                links.append(
+                    "\n![{}]({})\n".format(tr("изображение"), dest)
+                )
                 try:
                     self._insert_image_preview(source.read_bytes())
                 except Exception:  # noqa: BLE001 — превью не должно мешать
                     log.debug("Превью вложения не построено", exc_info=True)
             else:
-                links.append("[{}]({})".format(source.name, relative))
+                links.append(
+                    "[{}]({})".format(escape_link_text(source.name), dest)
+                )
         if not links:
             return
         self._insert_field_text(self.text, " ".join(links))
@@ -561,7 +571,12 @@ class NoteWindow:
             subdir = self._assets_subdir()
             self.text.insert(
                 "insert",
-                "\n![{}]({}/{})\n".format(tr("изображение"), subdir, name),
+                "\n![{}]({})\n".format(
+                    tr("изображение"),
+                    attachment_dest(
+                        "{}/{}".format(subdir, name), self._link_style()
+                    ),
+                ),
             )
             try:
                 if self.status.cget("text"):
@@ -897,6 +912,15 @@ class NoteWindow:
                 log.debug("Имя папки вложений недоступно", exc_info=True)
         return IMAGES_SUBDIR
 
+    def _link_style(self) -> str:
+        """Текущий стиль ссылок на вложения из настроек (plain/angle)."""
+        if self.link_style_provider:
+            try:
+                return self.link_style_provider() or "plain"
+            except Exception:  # noqa: BLE001
+                log.debug("Стиль ссылок недоступен", exc_info=True)
+        return "plain"
+
     def _fix_image_refs(self, content: str) -> str:
         """Подставить в тексте фактические имена файлов картинок."""
         for expected, actual in self._renamed.items():
@@ -908,8 +932,8 @@ class SettingsWindow:
     """Окно настроек: папка, хоткей, шаблоны, вложения, язык интерфейса.
 
     :param on_save: ``(notes_dir, hotkey_text, title_template, name_template,
-        assets_dir, language, text_template) -> Optional[str]`` — ошибка или
-        ``None``, если настройки применены (окно закрывается).
+        assets_dir, language, text_template, link_style) -> Optional[str]`` —
+        ошибка или ``None``, если настройки применены (окно закрывается).
     :param on_capture: начать запись комбинации клавиш из поля хоткея.
     :param on_close: окно закрыто (сюда приложение подчищает ссылку).
     """
@@ -924,8 +948,9 @@ class SettingsWindow:
         name_template: str = "",
         text_template: str = "",
         assets_dir: str = "",
+        link_style: str = "plain",
         language: str = "ru",
-        on_save: Callable[[str, str, str, str, str, str, str], Optional[str]],
+        on_save: Callable[[str, str, str, str, str, str, str, str], Optional[str]],
         on_capture: Callable[[], None],
         on_close: Callable[[], None],
     ) -> None:
@@ -1021,6 +1046,29 @@ class SettingsWindow:
         ttk.Entry(row5, textvariable=self.assets_var, width=44).pack(
             side="left", fill="x", expand=True
         )
+
+        row_link = ttk.Frame(frame)
+        row_link.pack(fill="x", pady=(0, 4))
+        ttk.Label(row_link, text=tr("Ссылки на вложения:"), width=23).pack(
+            side="left"
+        )
+        self._style_to_name = {
+            "plain": tr("Обычные [текст](путь)"),
+            "angle": tr("В угловых скобках [текст](<путь>)"),
+        }
+        self._name_to_style = {
+            name: style for style, name in self._style_to_name.items()
+        }
+        self.link_style_var = tk.StringVar(
+            value=self._style_to_name.get(link_style, self._style_to_name["plain"])
+        )
+        ttk.Combobox(
+            row_link,
+            textvariable=self.link_style_var,
+            values=list(self._style_to_name.values()),
+            state="readonly",
+            width=42,
+        ).pack(side="left", fill="x", expand=True)
 
         ttk.Label(
             frame,
@@ -1199,6 +1247,7 @@ class SettingsWindow:
             self.assets_var.get(),
             language,
             self._text_template_value(),
+            self._name_to_style.get(self.link_style_var.get().strip(), "plain"),
         )
         if error:
             self.error_var.set(error)

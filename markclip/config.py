@@ -77,6 +77,9 @@ class Config:
         и т. д.; пусто — текст без изменений, время в тело не добавляется)
     :param assets_dir: имя подпапки для картинок внутри папки заметок
         (пусто — ``assets``)
+    :param link_style: стиль Markdown-ссылок на вложения — ``plain``
+        (обычные, имя файла очищено от скобок) или ``angle``
+        (``[текст](<путь>)``, допустимы пробелы и скобки в имени файла)
     :param language: код языка интерфейса (``ru``/``en``/``zh``/…;
         файлы языков лежат в папке ``locales``)
     """
@@ -87,6 +90,7 @@ class Config:
     name_template: str = ""
     text_template: str = ""
     assets_dir: str = ""
+    link_style: str = "plain"
     language: str = "ru"
 
     def __post_init__(self) -> None:
@@ -96,6 +100,8 @@ class Config:
             self.hotkey = DEFAULT_HOTKEY
         if not str(self.language).strip():
             self.language = "ru"
+        if self.link_style not in ("plain", "angle"):
+            self.link_style = "plain"
 
     @property
     def notes_path(self) -> Path:
@@ -136,6 +142,7 @@ class Config:
                 "name_template",
                 "text_template",
                 "assets_dir",
+                "link_style",
                 "language",
             )
             and isinstance(value, str)

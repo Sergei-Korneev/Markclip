@@ -102,6 +102,7 @@ class Markclip:
                 self.config.name_template,
                 self.config.text_template,
             ),
+            link_style_provider=lambda: self.config.link_style,
             assets_provider=lambda: self.config.assets_dir,
         )
         self._setup_window_icon()
@@ -304,6 +305,7 @@ class Markclip:
             name_template=self.config.name_template,
             text_template=self.config.text_template,
             assets_dir=self.config.assets_dir,
+            link_style=self.config.link_style,
             language=self.config.language,
             on_save=self._save_settings,
             on_capture=self._start_capture,
@@ -320,6 +322,7 @@ class Markclip:
         assets_dir: str = "",
         language: str = "ru",
         text_template: str = "",
+        link_style: str = "plain",
     ) -> Optional[str]:
         """Применить настройки из окна. Возвращает текст ошибки или None."""
         notes_dir = (notes_dir or "").strip()
@@ -348,6 +351,9 @@ class Markclip:
         self.config.name_template = (name_template or "").strip()
         self.config.text_template = (text_template or "").strip()
         self.config.assets_dir = normalize_subdir(assets_dir)
+        self.config.link_style = (
+            link_style if link_style in ("plain", "angle") else "plain"
+        )
         # язык применяется последним: если он сменился, открытые окна и
         # меню трея сразу перерисовываются на новом языке
         self.config.language = set_language(language)
@@ -358,13 +364,14 @@ class Markclip:
             return save_error
         log.info(
             "Настройки применены: папка=%s, хоткей=%s, шаблоны=%r/%r/%r, "
-            "вложения=%s, язык=%s",
+            "вложения=%s, ссылки=%s, язык=%s",
             self.config.notes_dir,
             hotkey_display(new_hotkey),
             self.config.title_template,
             self.config.name_template,
             self.config.text_template,
             self.config.assets_dir,
+            self.config.link_style,
             self.config.language,
         )
         return None

@@ -114,6 +114,7 @@ def test_config_portable() -> None:
                 name_template="{date} {time}",
                 text_template="{url1}\n\n{text}",
                 assets_dir="вложения",
+                link_style="angle",
                 language="zh",
             )
             cfg.save()
@@ -128,9 +129,13 @@ def test_config_portable() -> None:
             assert loaded.name_template == "{date} {time}"
             assert loaded.text_template == "{url1}\n\n{text}"
             assert loaded.assets_dir == "вложения"
+            assert loaded.link_style == "angle"
             assert loaded.language == "zh"
             # пустой язык приводится к русскому
             assert Config(language="").language == "ru"
+            # неизвестный стиль ссылок приводится к обычному
+            assert Config().link_style == "plain"
+            assert Config(link_style="bogus").link_style == "plain"
 
             # битый JSON → не падаем
             (target / "config.json").write_text("{oops", encoding="utf-8")
@@ -444,8 +449,28 @@ def test_note_attachment() -> None:
         rel3 = attach_note_file(notes, weird, subdir="files")
         assert rel3 == "files/a_b_c_.txt"
 
+        # маркдаун-спецсимволы в имени рвут ссылку — они вычищаются
+        tricky = src_dir / "report (final) [v2]#x%.pdf"
+        tricky.write_bytes(b"y")
+        rel4 = attach_note_file(notes, tricky)
+        assert rel4 == "assets/report _final_ _v2_x_.pdf"
+
+        # стиль angle: скобки и пробелы допустимы, ломающие URL — нет
+        rel5 = attach_note_file(notes, tricky, link_style="angle")
+        assert rel5 == "assets/report (final) [v2]_x_.pdf"
+
         # несуществующий файл — None, ничего не создаётся
         assert attach_note_file(notes, src_dir / "missing.pdf") is None
+
+    # пункт назначения ссылки и экранирование её текста
+    from markclip.notes import attachment_dest, escape_link_text
+
+    assert attachment_dest("assets/my file.pdf") == "assets/my file.pdf"
+    assert (
+        attachment_dest("assets/my file.pdf", "angle")
+        == "<assets/my file.pdf>"
+    )
+    assert escape_link_text("a[b]c") == r"a\[b\]c"
 
     # разбор данных события Drop: пути с пробелами, file://-URI, пустота
     assert parse_drop_paths("{/tmp/a b.png} {/tmp/c.md}") == [

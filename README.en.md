@@ -31,7 +31,8 @@ vault if you use one (see below).
 * **Drag and drop**: drop files from your file manager right into the note
   window — images are inserted as `![image](assets/...)` (with a preview),
   other files as links to their attachment. The files themselves are
-  copied into the attachments folder (`assets/`), names are kept and
+  copied into the attachments folder (`assets/`), names are kept (with
+  link-breaking characters cleaned — see “Attachment links”) and
   existing files are never overwritten. Requires the `tkinterdnd2`
   package (installed with the other dependencies).
 * **Title and file name** — optional fields right in the note form.
@@ -53,8 +54,9 @@ vault if you use one (see below).
 * **Tray icon** (Linux and Windows) with a menu: open the window,
   settings, quit.
 * **Settings**: notes folder, hotkey, default title/file-name/note-text
-  templates for new notes, the attachments folder name and the interface
-  language. No need to type the shortcut as a string — the “Record
+  templates for new notes, the attachments folder name, the attachment
+  link style and the interface language.
+  No need to type the shortcut as a string — the “Record
   shortcut” button remembers whatever you press.
 * **Interface languages**: Russian, English and Chinese — switch them in
   settings, the whole UI changes at once (see “Languages”).
@@ -157,6 +159,10 @@ The **“Settings…”** item in the tray menu:
   the note body.
 * **Attachments folder** — the name of the subfolder inside the notes
   folder where clipboard images are stored (default `assets`);
+* **Attachment links** — how attachment links are written into the note
+  text: **plain** `[text](path)` (file names are cleaned of `()[]`, `#`
+  and `%` so the link never breaks) or **angle brackets** `[text](<path>)`
+  — then spaces and brackets are allowed in file names;
 * **Language** — the interface language: `Русский`, `English`, `中文`.
   The choice takes effect as soon as you press “Save” — open windows
   and the tray menu are switched immediately.
