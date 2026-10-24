@@ -516,6 +516,49 @@ def test_assets_dir_template() -> None:
     )
 
 
+def test_template_conditional() -> None:
+    """Условные блоки {имя: тело}: тело выводится при непустой подстановке."""
+    from markclip.gui import (
+        has_text_placeholders,
+        render_note_body,
+        render_template,
+    )
+
+    # ссылка найдена — тело выводится с подстановкой
+    assert (
+        render_template("{url1: text {url1} text2}", text="see https://ex.com")
+        == "text https://ex.com text2"
+    )
+    # ссылки нет — блок не даёт ничего
+    assert render_template("{url1: text {url1} text2}", text="no link here") == ""
+    assert render_template("{url1: only}", text="") == ""
+
+    # условия по тексту и вложенные блоки
+    assert render_template("{text: A {text: B {text} C} D}", text="x") == "A B x C D"
+    assert render_template("{text: A {text: B} C}", text="") == ""
+
+    # литеральные скобки внутри тела, смешанный текст
+    assert (
+        render_template("head {url1: ({{ok}} {url1})} tail", text="u https://a.io")
+        == "head ({ok} https://a.io) tail"
+    )
+    assert render_template("head {url1: ({ok})} tail", text="u") == "head  tail"
+
+    # незакрытый блок не роняет разбор
+    assert render_template("{url1: unclosed", text="u https://a") == "{url1: unclosed"
+
+    # блоки распознаются как зависящие от текста (ждут сохранения)
+    assert has_text_placeholders("{url1: found}")
+    assert has_text_placeholders("{text: prefix}")
+
+    # с телом заметки: блок умер — текст без изменений
+    assert render_note_body("{url1: src {url1}}", "my text") == "my text"
+    assert (
+        render_note_body("{url1: src {url1}}", "see https://ex.com x")
+        == "src https://ex.com\n\nsee https://ex.com x"
+    )
+
+
 TESTS = (
     test_hotkey_normalize,
     test_hotkey_display,
@@ -524,6 +567,7 @@ TESTS = (
     test_notes_image,
     test_notes_named,
     test_render_template,
+    test_template_conditional,
     test_note_body_template,
     test_name_from_text_template,
     test_note_attachment,

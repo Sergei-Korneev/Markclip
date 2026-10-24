@@ -90,15 +90,16 @@ def parse_drop_paths(data: str) -> List[str]:
     return paths
 
 
-#: Токены шаблона: ``{{``/``}}`` (литеральные скобки) и ``{имя}``/``{имя:N}``
-#: с известными именами; всё остальное остаётся как есть.
-_TOKEN_RE = re.compile(
-    r"\{\{|\}\}|\{(date|time|datetime|text|url1)(?::(\d+))?\}"
-)
+#: Токены шаблона: ``{имя}``/``{имя:N}`` с известными именами; ``{{``/``}}``
+#: обрабатываются сканером отдельно, всё остальное остаётся как есть.
+_TOKEN_RE = re.compile(r"\{(date|time|datetime|text|url1)(?::(\d+))?\}")
+
+#: Начало условного блока ``{имя: тело}`` (см. :func:`render_template`).
+_COND_RE = re.compile(r"\{(date|time|datetime|text|url1):")
 
 #: Подстановки, которым нужен введённый текст заметки (применяются
 #: только при сохранении — при открытии формы текста ещё нет).
-_TEXT_PLACEHOLDER_RE = re.compile(r"\{text(?::\d+)?\}|\{url1\}")
+_TEXT_PLACEHOLDER_RE = re.compile(r"\{text(?::\d+)?[:}]|\{url1[:}]")
 
 #: Первая ссылка в тексте (без висячей пунктуации в конце).
 _URL_RE = re.compile(r"https?://[^\s<>'\"()\[\]{}]+")
@@ -135,41 +136,104 @@ def render_template(
     ``{text:90}`` — первые 90 символов (пробелы сворачиваются в один),
     ``{url1}`` — первая ссылка ``http(s)://`` в тексте.
 
+    Условный блок ``{имя: тело}`` выводится целиком, только если
+    подстановка ``имя`` непуста (ссылка найдена, текст есть), иначе
+    не даёт ничего. Пример: ``{url1: источник {url1}.}``. Тело может
+    содержать подстановки и вложенные условные блоки; пробел сразу
+    после двоеточия — разделитель и в тело не входит.
+
     Литеральная фигурная скобка удваивается: ``{{``. Неизвестные
     подстановки остаются как есть, кривой шаблон не приводит к ошибке.
     Подставляемый текст повторно не разбирается — фигурные скобки
     внутри него доходят до результата как есть.
     """
     moment = now or datetime.now()
-    source = template or ""
     values = {
         "date": moment.strftime("%Y-%m-%d"),
         "time": moment.strftime("%H-%M-%S"),
         "datetime": moment.strftime("%Y-%m-%d %H-%M-%S"),
         "url1": first_url(text),
     }
+    return _render_source(template or "", values, text)
 
-    parts = []
-    position = 0
-    for match in _TOKEN_RE.finditer(source):
-        parts.append(source[position : match.start()])
-        position = match.end()
-        token = match.group(0)
-        if token == "{{":
+
+def _render_source(source: str, values: dict, text: str) -> str:
+    """Разобрать шаблон: подстановки, ``{{``/``}}`` и условные блоки."""
+    parts: list = []
+    i = 0
+    size = len(source)
+    while i < size:
+        if source.startswith("{{", i):
             parts.append("{")
+            i += 2
             continue
-        if token == "}}":
+        if source.startswith("}}", i):
             parts.append("}")
+            i += 2
             continue
-        name, limit = match.group(1), match.group(2)
-        if name == "text":
-            parts.append(
-                (text or "") if limit is None else _text_snippet(text, int(limit))
-            )
-        else:
-            parts.append(values[name])
-    parts.append(source[position:])
+        if source[i] == "{":
+            match = _TOKEN_RE.match(source, i)
+            if match:
+                name, limit = match.group(1), match.group(2)
+                if name == "text":
+                    parts.append(
+                        (text or "")
+                        if limit is None
+                        else _text_snippet(text, int(limit))
+                    )
+                else:
+                    parts.append(values[name])
+                i = match.end()
+                continue
+            cond = _COND_RE.match(source, i)
+            if cond:
+                body, end = _read_block(source, cond.end())
+                if body is None:
+                    # незакрытый блок — оставляем как есть
+                    parts.append(source[i:end])
+                else:
+                    filled = (
+                        (text or "") if cond.group(1) == "text" else values[cond.group(1)]
+                    )
+                    if filled:
+                        parts.append(_render_source(body, values, text))
+                i = end
+                continue
+        parts.append(source[i])
+        i += 1
     return "".join(parts)
+
+
+def _read_block(source: str, start: int) -> Tuple[Optional[str], int]:
+    """Тело условного блока и позиция за его закрывающей скобкой.
+
+    Скобки считаются с учётом литеральных ``{{``/``}}``; готовые токены
+    ``{имя}``/``{имя:N}`` атомарны — их скобки не считаются, иначе
+    ``{url1: … {url1}}`` закрылось бы раньше времени. Незакрытый блок
+    возвращает ``(None, len(source))`` — его текст не трогают.
+    """
+    depth = 1
+    i = start
+    size = len(source)
+    while i < size:
+        if source.startswith("{{", i) or source.startswith("}}", i):
+            i += 2
+            continue
+        if source[i] == "{":
+            token = _TOKEN_RE.match(source, i)
+            if token:
+                i = token.end()
+                continue
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                body = source[start:i]
+                if body.startswith(" "):
+                    body = body[1:]  # пробел после «:» — разделитель
+                return body, i + 1
+        i += 1
+    return None, size
 
 
 def render_note_body(template: str, text: str) -> str:
@@ -1123,7 +1187,9 @@ class SettingsWindow:
                 "{date} — 2026-10-23, {time} — 21-30-45, "
                 "{datetime} — «2026-10-23 21-30-45»; литеральная скобка — {{ .\n"
                 "Подстановки по тексту ({text}, {text:90} — первые 90 символов, "
-                "{url1} — первая ссылка в тексте) применяются при сохранении.\n"
+                "{url1} — первая ссылка в тексте) применяются при сохранении; "
+                "условный блок {url1: источник {url1}.} выводится, только если "
+                "подстановка непуста.\n"
                 "Шаблон текста заметки оборачивает введённый текст: "
                 "{text} — сам текст; без него текст дописывается в конец. "
                 "Пустой шаблон — текст без изменений.\n"

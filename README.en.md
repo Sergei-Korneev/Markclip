@@ -156,7 +156,10 @@ The **“Settings…”** item in the tray menu:
   `{date}`/`{time}`/`{datetime}` — the save moment. If the template
   has no `{text}`, the text is appended at the end. Leave empty
   (the default) and the text is saved as-is — no time is put into
-  the note body.
+  the note body. A conditional block `{url1: source {url1}.}` is
+  rendered whole only when its placeholder is not empty (no link —
+  the block contributes nothing); the block body may contain
+  placeholders and nested conditional blocks;
 * **Attachments folder** — the subfolder inside the notes folder where
   attachments are copied (default `assets`). The `{$notename}` placeholder
   (the note name) is supported: `assets/{$notename}` stores attachments
