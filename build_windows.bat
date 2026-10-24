@@ -12,6 +12,8 @@ if not exist .venv\Scripts\pyinstaller.exe (
 
 REM --collect-submodules: pynput and pystray load platform backends
 REM dynamically; static analysis does not always find them.
+REM --collect-all: tkinterdnd2 bundles the tkdnd extension binaries used
+REM for drag and drop of files into the note window.
 REM --add-data: the interface language files (locales\*.json) go into the exe;
 REM a locales\ folder next to the exe takes priority, so translations can be
 REM edited without rebuilding.
@@ -19,6 +21,7 @@ REM edited without rebuilding.
     --name Markclip ^
     --collect-submodules pynput ^
     --collect-submodules pystray ^
+    --collect-all tkinterdnd2 ^
     --add-data "locales;locales" ^
     run.py
 

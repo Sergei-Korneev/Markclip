@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -20,6 +21,7 @@ __all__ = [
     "save_note",
     "save_note_file",
     "save_note_image",
+    "attach_note_file",
     "sanitize_file_name",
     "normalize_subdir",
     "open_folder",
@@ -158,6 +160,42 @@ def normalize_subdir(subdir: str) -> str:
     """
     cleaned = sanitize_file_name(subdir or "")
     return cleaned or IMAGES_SUBDIR
+
+
+def attach_note_file(
+    notes_dir: PathLike, source: PathLike, subdir: str = ""
+) -> Optional[str]:
+    """Скопировать файл в ``<notes_dir>/<subdir>`` как вложение заметки.
+
+    Имя файла сохраняется (символы вычищаются), при совпадении добавляется
+    суффикс (``_2``, ``_3``…) — чужие файлы не перезаписываются. Возвращает
+    относительный путь вида ``assets/договор.pdf`` для Markdown-ссылки
+    или ``None``, если файла нет.
+    """
+    src = Path(source).expanduser()
+    if not src.is_file():
+        return None
+
+    clean_subdir = normalize_subdir(subdir)
+    directory = Path(notes_dir).expanduser() / clean_subdir
+    directory.mkdir(parents=True, exist_ok=True)
+
+    stem = sanitize_file_name(src.stem)
+    if not stem:
+        stem = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    if stem.split(".")[0].upper() in _RESERVED_STEMS:
+        stem = "_" + stem  # Windows не даёт файлы вида CON.pdf, AUX.pdf…
+    suffix = src.suffix.lower()
+
+    target = directory / (stem + suffix)
+    counter = 2
+    while target.exists():
+        target = directory / "{}_{}{}".format(stem, counter, suffix)
+        counter += 1
+
+    shutil.copy2(src, target)
+    log.debug("Вложение сохранено: %s → %s", src, target)
+    return "{}/{}".format(clean_subdir, target.name)
 
 
 def save_note_image(

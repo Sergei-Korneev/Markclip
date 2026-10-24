@@ -9,12 +9,14 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, ttk
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
+from urllib.parse import unquote, urlparse
 
 from .clipboard import get_clipboard_image
 from .i18n import available_languages, language_name, tr
 from .notes import (
     IMAGES_SUBDIR,
+    attach_note_file,
     normalize_subdir,
     sanitize_file_name,
     save_note_image,
@@ -22,10 +24,66 @@ from .notes import (
 
 log = logging.getLogger(__name__)
 
-__all__ = ["NoteWindow", "SettingsWindow"]
+__all__ = ["NoteWindow", "SettingsWindow", "create_root", "parse_drop_paths"]
 
 _ERROR_COLOR = "#b00020"
 _MUTED_COLOR = "#666666"
+
+#: Расширения картинок: перетащенные файлы с ними вставляются как
+#: ``![изображение](assets/...)``, остальные — обычной ссылкой на вложение.
+IMAGE_EXTENSIONS = frozenset(
+    ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "tif", "tiff", "ico"]
+)
+
+#: Тип tkdnd для файлов (``tkinterdnd2.DND_FILES``).
+_DND_FILES = "DND_Files"
+
+
+def create_root() -> tk.Tk:
+    """Создать корневое окно с поддержкой перетаскивания файлов.
+
+    Используется пакет ``tkinterdnd2`` (расширение tkdnd). Если его нет
+    или расширение не загрузилось, окно создаётся обычным — приложение
+    работает просто без drag-and-drop.
+    """
+    try:
+        from tkinterdnd2 import TkinterDnD
+
+        return TkinterDnD.Tk()
+    except Exception:  # noqa: BLE001 — dnd не должен ронять приложение
+        log.debug(
+            "tkinterdnd2 недоступен — перетаскивание файлов выключено",
+            exc_info=True,
+        )
+        return tk.Tk()
+
+
+def parse_drop_paths(data: str) -> List[str]:
+    """Разобрать данные события ``<<Drop>>`` (tkdnd) в список путей.
+
+    ``event.data`` — Tcl-список: пути с пробелами заключены в фигурные
+    скобки. Иногда приходит одиночный путь или ``file://``-URI. Пустое
+    и неразбираемое игнорируется.
+    """
+    raw = (data or "").strip()
+    if not raw:
+        return []
+    try:
+        items = list(tk.Tcl().splitlist(raw))
+    except tk.TclError:
+        items = [raw]
+    paths = []
+    for item in items:
+        text = item.strip()
+        if not text:
+            continue
+        if text.startswith("file://"):
+            text = unquote(urlparse(text).path)
+            if len(text) >= 3 and text[0] == "/" and text[2] == ":":
+                text = text[1:]  # file:///C:/... на Windows
+        if text:
+            paths.append(text)
+    return paths
 
 
 #: Токены шаблона: ``{{``/``}}`` (литеральные скобки) и ``{имя}``/``{имя:N}``
@@ -285,6 +343,9 @@ class NoteWindow:
             widget.bind("<Menu>", self._on_context)
             widget.bind("<Shift-F10>", self._on_context)
 
+        # файлы, перетащенные из файлового менеджера, — вложения заметки
+        self._setup_drop_target()
+
     # ------------------------------------------------------------------
     # Обработчики
     # ------------------------------------------------------------------
@@ -394,6 +455,66 @@ class NoteWindow:
     def _on_escape(self, _event):
         self.hide()
         return "break"
+
+    def _setup_drop_target(self) -> None:
+        """Разрешить перетаскивание файлов в окно (нужен tkdnd/tkinterdnd2).
+
+        Цель для броска — всё окно и текст заметки; брошенные файлы
+        копируются в папку вложений и вставляются в текст ссылками.
+        """
+        register = getattr(self.root, "drop_target_register", None)
+        bind = getattr(self.root, "dnd_bind", None)
+        if register is None or bind is None:
+            log.debug("Перетаскивание файлов недоступно (нет tkinterdnd2)")
+            return
+        try:
+            # тип tkdnd для файлов = tkinterdnd2.DND_FILES
+            for widget in (self.root, self.text):
+                widget.drop_target_register(_DND_FILES)
+                widget.dnd_bind("<<Drop>>", self._on_drop)
+        except tk.TclError:
+            log.debug("Не удалось включить перетаскивание файлов", exc_info=True)
+            return
+        log.debug("Перетаскивание файлов в окно заметки включено")
+
+    def _on_drop(self, event) -> None:
+        """Файлы перетащили в окно — копируем вложения и вставляем ссылки.
+
+        Картинки вставляются как ``![изображение](assets/файл)`` — так же,
+        как при вставке из буфера; остальные файлы становятся обычными
+        ссылками на своё вложение в папке ``assets``.
+        """
+        notes_dir = (
+            self.notes_dir_provider() if self.notes_dir_provider else None
+        )
+        if not notes_dir:
+            log.debug("Бросили файлы, но папка заметок не выбрана")
+            return
+        subdir = self._assets_subdir()
+        links = []
+        for path in parse_drop_paths(getattr(event, "data", "")):
+            relative = attach_note_file(notes_dir, path, subdir)
+            if not relative:
+                log.debug("Брошенный файл пропущен: %s", path)
+                continue
+            log.debug("Брошенный файл %s → вложение %s", path, relative)
+            source = Path(path)
+            if source.suffix.lower().lstrip(".") in IMAGE_EXTENSIONS:
+                links.append("\n![{}]({})\n".format(tr("изображение"), relative))
+                try:
+                    self._insert_image_preview(source.read_bytes())
+                except Exception:  # noqa: BLE001 — превью не должно мешать
+                    log.debug("Превью вложения не построено", exc_info=True)
+            else:
+                links.append("[{}]({})".format(source.name, relative))
+        if not links:
+            return
+        self._insert_field_text(self.text, " ".join(links))
+        try:
+            if self.status.cget("text"):
+                self.status.config(text="")
+        except tk.TclError:
+            pass
 
     def _on_paste(self, event) -> str:
         """Ctrl+V / Shift+Insert: в текст — картинка или текст, в поля — текст."""

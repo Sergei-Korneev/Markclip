@@ -22,7 +22,7 @@ if errorlevel 1 (
 
 echo.
 echo Checking dependencies...
-.venv\Scripts\python.exe -c "import tkinter, PIL, pynput.keyboard, pystray; print('  tkinter, Pillow, pynput, pystray - ok'); print('  tray backend:', pystray.Icon.__module__)"
+.venv\Scripts\python.exe -c "import tkinter, PIL, pynput.keyboard, pystray, tkinterdnd2; print('  tkinter, Pillow, pynput, pystray, tkinterdnd2 (drag and drop) - ok'); print('  tray backend:', pystray.Icon.__module__)"
 if errorlevel 1 (
     echo Dependencies are incomplete. Run install.bat again.
     exit /b 1

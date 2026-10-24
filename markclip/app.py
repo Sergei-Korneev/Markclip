@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 from . import __version__
 from .config import DEFAULT_HOTKEY, Config, config_dir
-from .gui import NoteWindow, SettingsWindow
+from .gui import NoteWindow, SettingsWindow, create_root
 from .hotkey import (
     HotkeyCapture,
     HotkeyError,
@@ -92,7 +92,7 @@ class Markclip:
         self.hotkey_error: Optional[str] = None
         self._icon_photo = None  # не дать сборщику мусора удалить иконку окна
 
-        self.root = tk.Tk()
+        self.root = create_root()
         self.note_window = NoteWindow(
             self.root,
             on_submit=self._submit_note,

@@ -28,6 +28,12 @@ vault if you use one (see below).
   `<notes folder>/assets/`, an inline preview appears in the input window,
   and a Markdown link `![image](assets/...)` goes into the note text.
   Works on Linux/X11, Windows and macOS.
+* **Drag and drop**: drop files from your file manager right into the note
+  window — images are inserted as `![image](assets/...)` (with a preview),
+  other files as links to their attachment. The files themselves are
+  copied into the attachments folder (`assets/`), names are kept and
+  existing files are never overwritten. Requires the `tkinterdnd2`
+  package (installed with the other dependencies).
 * **Title and file name** — optional fields right in the note form.
   Fill them in and the note is saved as a standalone `<name>.md` file
   (the title goes on the first line as `# ...`); leave them empty and

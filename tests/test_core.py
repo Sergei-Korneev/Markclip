@@ -417,6 +417,46 @@ def test_i18n_keys() -> None:
         )
 
 
+def test_note_attachment() -> None:
+    """Брошенный в окно файл копируется в папку вложений как вложение."""
+    from markclip.gui import parse_drop_paths
+    from markclip.notes import attach_note_file
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        src_dir = base / "src"
+        src_dir.mkdir()
+        (src_dir / "contract.pdf").write_bytes(b"%PDF-1.4")
+        notes = base / "notes"
+
+        # файл копируется в assets с сохранением имени
+        rel = attach_note_file(notes, src_dir / "contract.pdf")
+        assert rel == "assets/contract.pdf"
+        assert (notes / "assets" / "contract.pdf").read_bytes() == b"%PDF-1.4"
+
+        # повторное вложение имени не перезаписывает — суффикс _2
+        rel2 = attach_note_file(notes, src_dir / "contract.pdf")
+        assert rel2 == "assets/contract_2.pdf"
+
+        # подпапка вложений меняется, имя файла чистится
+        weird = src_dir / "a:b*c?.txt"
+        weird.write_text("x", encoding="utf-8")
+        rel3 = attach_note_file(notes, weird, subdir="files")
+        assert rel3 == "files/a_b_c_.txt"
+
+        # несуществующий файл — None, ничего не создаётся
+        assert attach_note_file(notes, src_dir / "missing.pdf") is None
+
+    # разбор данных события Drop: пути с пробелами, file://-URI, пустота
+    assert parse_drop_paths("{/tmp/a b.png} {/tmp/c.md}") == [
+        "/tmp/a b.png",
+        "/tmp/c.md",
+    ]
+    assert parse_drop_paths("/tmp/one.png") == ["/tmp/one.png"]
+    assert parse_drop_paths("file:///home/u/pic.png") == ["/home/u/pic.png"]
+    assert parse_drop_paths("") == []
+
+
 TESTS = (
     test_hotkey_normalize,
     test_hotkey_display,
@@ -427,6 +467,7 @@ TESTS = (
     test_render_template,
     test_note_body_template,
     test_name_from_text_template,
+    test_note_attachment,
     test_i18n,
     test_i18n_keys,
     test_icon,

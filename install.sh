@@ -27,7 +27,7 @@ if ! .venv/bin/python -m pip install --quiet -r requirements.txt; then
     echo
     echo "Full installation failed (most likely evdev without kernel headers)."
     echo "Installing dependencies one by one, pynput without dependencies..."
-    .venv/bin/python -m pip install --quiet Pillow pystray six python-xlib
+    .venv/bin/python -m pip install --quiet Pillow pystray six python-xlib tkinterdnd2
     .venv/bin/python -m pip install --quiet --no-deps pynput
 fi
 
@@ -41,6 +41,12 @@ import pystray
 
 backend = pystray.Icon.__module__
 print("  tkinter, Pillow, pynput — ok")
+try:
+    import tkinterdnd2  # noqa: F401
+except ImportError:
+    print("  tkinterdnd2 NOT installed — drag and drop is disabled")
+else:
+    print("  tkinterdnd2 (drag and drop) — ok")
 print("  tray backend:", backend)
 if backend == "pystray._xorg":
     print()
