@@ -177,9 +177,6 @@ class NoteWindow:
         self._text_template = ""
         self._deferred_title = False
         self._deferred_name = False
-        # выбор из списка только что состоялся: его событие фокуса
-        # не должно снова раскрывать список
-        self._name_just_selected = False
         # поле, под которым открылось контекстное меню
         self._context_target: Optional[tk.Widget] = None
         # защита от повторного Ctrl+V, пока читается буфер обмена
@@ -213,11 +210,17 @@ class NoteWindow:
         # дописывает новый текст в его конец (см. save_note_file)
         self.name_entry = ttk.Combobox(row_name, textvariable=self.name_var)
         self.name_entry.pack(fill="x")
-        self.name_entry.bind("<FocusIn>", self._post_name_choices)
         self.name_entry.bind("<<ComboboxSelected>>", self._on_name_selected)
-        # <Map> у списка комбинированного поля по умолчанию делает
-        # focus -force на себя — тогда печатать в окне нельзя; отключаем
-        self.name_entry.bind_class("ComboboxListbox", "<Map>", "")
+        # список открывается только по стрелке в поле (или клавише Down);
+        # его <Map> по умолчанию делает focus -force на себя и берёт grab —
+        # тогда печатать в окне нельзя. Отпускаем grab сразу после раскрытия
+        # и оставляем ввод тому, у кого он был: набирать имя файла или текст
+        # заметки можно и при открытом списке
+        self.name_entry.bind_class(
+            "ComboboxListbox",
+            "<Map>",
+            "after idle {catch {ttk::releaseGrab [winfo toplevel %W]}}",
+        )
 
         self.label_text = ttk.Label(outer, text=tr("Текст заметки:"))
         self.label_text.pack(anchor="w")
@@ -328,38 +331,6 @@ class NoteWindow:
         except tk.TclError:
             pass
 
-    def _post_name_choices(self, _event=None) -> None:
-        """Раскрыть список существующих файлов при фокусе на поле имени."""
-        if self._name_just_selected:
-            return  # фокус пришёл из обработчика выбора — список не нужен
-        log.debug("Фокус на поле имени — раскрываю список заметок")
-        self.name_entry.after_idle(self._post_name_choices_now)
-
-    def _post_name_choices_now(self, focus_back=None) -> None:
-        """Раскрыть список файлов, не отбирая ввод у нужного виджета.
-
-        ``focus_back`` — куда вернуть фокус (по умолчанию — поле имени,
-        при открытии окна сюда передаётся текст заметки).
-        """
-        try:
-            if not self.name_entry["values"]:
-                return
-            # у ttk.Combobox в tkinter нет метода post() — вызываем
-            # внутреннюю Tcl-процедуру, которой стрелка раскрывает список
-            self.name_entry.tk.call(
-                "ttk::combobox::Post", str(self.name_entry)
-            )
-            # список остаётся видимым, но его глобальный grab отпускается:
-            # иначе он перехватит ввод и печатать текст будет нельзя
-            popdown = self.name_entry.tk.eval(
-                "ttk::combobox::PopdownWindow " + str(self.name_entry)
-            )
-            self.name_entry.tk.call("ttk::releaseGrab", popdown)
-            log.debug("Раскрыл список, возвращаю фокус в %s", focus_back)
-            (focus_back or self.name_entry).focus_force()
-        except tk.TclError:
-            log.debug("Не удалось раскрыть список заметок", exc_info=True)
-
     def _close_name_choices(self, _event=None) -> None:
         """Закрыть список файлов (безопасно, если он уже закрыт)."""
         try:
@@ -369,24 +340,14 @@ class NoteWindow:
         except tk.TclError:
             pass
 
-    def _clear_name_selection_guard(self) -> None:
-        self._name_just_selected = False
-
     def _on_name_selected(self, _event=None) -> None:
-        """Выбор файла из списка — фокус в текст, чтобы дописывать заметку.
-
-        На время обработки ставится флаг: событие фокуса поля имени,
-        порождённое выбором, не должно снова раскрыть список.
-        """
+        """Выбор файла из списка — фокус в текст, чтобы дописывать заметку."""
         log.debug("Из списка выбран файл %r", self.name_var.get())
-        self._name_just_selected = True
-        self.name_entry.after(300, self._clear_name_selection_guard)
         try:
             self.text.focus_force()
         except tk.TclError:
             log.debug("Фокус в текст не перешёл", exc_info=True)
         self.name_entry.after_idle(self._close_name_choices)
-        self.name_entry.after(100, self._close_name_choices)
 
     def _apply_templates(self) -> None:
         """Подставить шаблонные заголовок/имя в пустую форму новой заметки.
@@ -682,9 +643,6 @@ class NoteWindow:
             log.debug("Не удалось показать окно заметки", exc_info=True)
         # Повторный захват фокуса: некоторые WM игнорируют первый вызов
         self.root.after(150, self._focus_again)
-        # список существующих заметок виден сразу при открытии окна;
-        # фокус остаётся в тексте — печатать заметку можно сразу
-        self.root.after(250, self._post_name_choices_now, self.text)
         # Верхний слой снимаем — чтобы не мешал другим окнам
         self.root.after(500, self._unset_topmost)
 

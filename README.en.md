@@ -33,8 +33,8 @@ vault if you use one (see below).
   (the title goes on the first line as `# ...`); leave them empty and
   it behaves as before — appended to the daily `YYYY-MM-DD.md`. The file
   name follows the title automatically until you edit it by hand. The
-  “File name” field lists the notes that already exist: the list is open
-  when the window appears (and on click in the field) and closes as soon
+  “File name” field knows the notes that already exist: the list opens
+  from the field’s arrow (or the `Down` key) and closes as soon
   as you start typing. Pick a file and the new text is **appended to its
   end** — an easy way to continue any note. A new name creates a file,
   while a name derived from an empty field (title or timestamp) never
