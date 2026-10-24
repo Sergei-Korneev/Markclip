@@ -97,8 +97,13 @@ def save_note_file(
 
     Файл — ``<notes_dir>/<имя>.md``, заголовок (если есть) идёт первой
     строкой как ``# ...``. Имя берётся из ``name``, иначе из ``title``,
-    иначе — метка времени. Существующий файл с тем же именем **не
-    перезаписывается** — добавляется суффикс (``_2``, ``_3``…).
+    иначе — метка времени.
+
+    Если заданное имя совпадает с уже существующим файлом, текст
+    **дописывается в конец** этого файла — так из окна заметки можно
+    продолжить существующую заметку (заголовок при этом не повторяется).
+    Имя, выведенное из заголовка/времени, чужой файл не трогает —
+    добавляется суффикс (``_2``, ``_3``…), перезаписи нет.
 
     Возвращает путь к файлу или ``None``, если нет ни текста, ни заголовка.
     """
@@ -107,6 +112,7 @@ def save_note_file(
     if not content and not clean_title:
         return None
 
+    explicit_name = bool(sanitize_file_name(name))
     stem = sanitize_file_name(name) or sanitize_file_name(clean_title)
     if not stem:
         stem = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -120,6 +126,15 @@ def save_note_file(
     directory = Path(notes_dir).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (stem + ".md")
+
+    if path.exists() and explicit_name:
+        # явное имя совпало с существующим файлом — дописываем текст в конец
+        if content:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("\n" + content + "\n")
+        log.debug("Текст дописан в существующий файл %s", path)
+        return path
+
     counter = 2
     while path.exists():
         path = directory / "{}_{}.md".format(stem, counter)

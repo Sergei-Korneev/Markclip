@@ -32,8 +32,13 @@ vault if you use one (see below).
   Fill them in and the note is saved as a standalone `<name>.md` file
   (the title goes on the first line as `# ...`); leave them empty and
   it behaves as before — appended to the daily `YYYY-MM-DD.md`. The file
-  name follows the title automatically until you edit it by hand;
-  existing files are never overwritten — a `_2` suffix is added.
+  name follows the title automatically until you edit it by hand. The
+  “File name” field lists the notes that already exist: the list is open
+  when the window appears (and on click in the field) and closes as soon
+  as you start typing. Pick a file and the new text is **appended to its
+  end** — an easy way to continue any note. A new name creates a file,
+  while a name derived from an empty field (title or timestamp) never
+  touches foreign files — a `_2` suffix is added on collision.
   Both fields can be pre-filled with templates — date/time, the first
   N characters of the text, the first link (see below).
 * **Daily Markdown files** `YYYY-MM-DD.md` in the configured folder, each

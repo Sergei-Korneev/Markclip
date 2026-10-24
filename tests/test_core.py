@@ -204,7 +204,7 @@ def test_notes_image() -> None:
 
 
 def test_notes_named() -> None:
-    """Именованная заметка: заголовок, имя файла, чистка и уникальность."""
+    """Именованная заметка: заголовок, имя файла, чистка, дописывание."""
     from markclip.notes import sanitize_file_name, save_note_file
 
     assert sanitize_file_name('a/b\\c:d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
@@ -221,19 +221,26 @@ def test_notes_named() -> None:
         assert "текст заметки" in body
 
         # имя пустое → файл по заголовку
-        path2 = save_note_file(base, "т2", title="Вторая", name="")
+        path2 = save_note_file(base, "part2", title="Вторая", name="")
         assert path2 == base / "Вторая.md"
 
-        # совпадение имён не перезаписывает, а добавляет суффикс
-        path3 = save_note_file(base, "т3", title="Другое", name="Вторая.md")
-        assert path3 == base / "Вторая_2.md"
-        assert path2.read_text(encoding="utf-8").startswith("# Вторая\n")
-        assert "т3" in path3.read_text(encoding="utf-8")
+        # явное имя совпало с существующим файлом — текст дописывается
+        path3 = save_note_file(base, "part3", title="Другое", name="Вторая.md")
+        assert path3 == base / "Вторая.md"
+        merged = path3.read_text(encoding="utf-8")
+        assert merged == "# Вторая\n\npart2\n\npart3\n"
+        assert "Другое" not in merged  # заголовок при дописывании не повторяется
+
+        # имя из заголовка чужой файл не трогает — суффикс _2
+        path3b = save_note_file(base, "part3b", title="Вторая", name="")
+        assert path3b == base / "Вторая_2.md"
+        assert "part3b" in path3b.read_text(encoding="utf-8")
+        assert path3.read_text(encoding="utf-8") == merged
 
         # запрещённые символы вычищаются; без заголовка — только текст
-        path4 = save_note_file(base, "т4", title="", name="итог: 2026/10")
+        path4 = save_note_file(base, "part4", title="", name="итог: 2026/10")
         assert path4 == base / "итог_ 2026_10.md"
-        assert path4.read_text(encoding="utf-8") == "т4\n"
+        assert path4.read_text(encoding="utf-8") == "part4\n"
 
         # ни текста, ни заголовка — сохранять нечего
         assert save_note_file(base, "  ", title=" ") is None
