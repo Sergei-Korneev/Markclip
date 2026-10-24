@@ -62,6 +62,46 @@ def create_root() -> tk.Tk:
         return tk.Tk()
 
 
+#: Клавиши, не запускающие автопоиск в поле имени файла:
+#: навигация, модификаторы, служебные клавиши.
+_NAME_SKIP_KEYSYMS = frozenset(
+    [
+        "Shift_L",
+        "Shift_R",
+        "Control_L",
+        "Control_R",
+        "Alt_L",
+        "Alt_R",
+        "Super_L",
+        "Super_R",
+        "Meta_L",
+        "Meta_R",
+        "ISO_Level3_Shift",
+        "Caps_Lock",
+        "Num_Lock",
+        "Scroll_Lock",
+        "Left",
+        "Right",
+        "Up",
+        "Down",
+        "Home",
+        "End",
+        "Prior",
+        "Next",
+        "Tab",
+        "ISO_Left_Tab",
+        "Return",
+        "KP_Enter",
+        "Escape",
+        "Menu",
+        "Insert",
+        "Print",
+        "Pause",
+    ]
+    + ["F{}".format(number) for number in range(1, 13)]
+)
+
+
 def filter_name_choices(choices: list, needle: str) -> list:
     """Отфильтровать имена файлов по подстроке (без учёта регистра).
 
@@ -500,18 +540,29 @@ class NoteWindow:
     # Автопоиск по именам файлов: набор, стрелки, выбор
     # ------------------------------------------------------------------
     def _on_name_typing(self, event) -> None:
-        """Набор в поле имени: фильтруем список и дополняем имя."""
+        """Набор в поле имени: фильтруем список и дополняем имя.
+
+        Решает набранное значение поля, а не символ события: у отпускания
+        клавиш в Tk 9/X11 ``event.char`` часто пуст (и у кириллицы, и у
+        латиницы), поэтому он не используется.
+        """
+        if event.keysym in _NAME_SKIP_KEYSYMS or event.state & 0x004C:
+            return  # навигация, модификаторы, Ctrl/Alt-комбинации
         if event.keysym in ("BackSpace", "Delete"):
             # после удаления — только фильтр, без дополнения
             self._filter_name_choices(self.name_var.get(), complete=False)
             return
-        if not (event.char and event.char.isprintable()):
-            return  # навигация, модификаторы, Enter/Tab — список не трогаем
         self._filter_name_choices(self.name_var.get(), complete=True)
 
     def _filter_name_choices(self, typed: str, complete: bool = True) -> None:
         """Показать в списке совпадения и (опционально) дополнить имя."""
         matches = filter_name_choices(self._name_choices, typed)
+        log.debug(
+            "Автопоиск %r: совпадений %d, всего имён %d",
+            typed,
+            len(matches),
+            len(self._name_choices),
+        )
         self._name_choice_index = -1
         try:
             self.name_entry["values"] = matches[:300]
