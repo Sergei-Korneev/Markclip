@@ -88,9 +88,7 @@ def _safe_attachment_stem(name: str, link_style: str = "plain") -> str:
     cleaned = re.sub(r"_{2,}", "_", cleaned).strip(". ")
     if not cleaned:
         return datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    if cleaned.split(".")[0].upper() in _RESERVED_STEMS:
-        cleaned = "_" + cleaned  # Windows не даёт файлы вида CON.pdf, AUX.pdf…
-    return cleaned
+    return _escape_reserved_name(cleaned)
 
 #: Имена, зарезервированные Windows (к ним нельзя обращаться как к файлу).
 _RESERVED_STEMS = frozenset(
@@ -98,6 +96,20 @@ _RESERVED_STEMS = frozenset(
     + ["COM{}".format(i) for i in range(1, 10)]
     + ["LPT{}".format(i) for i in range(1, 10)]
 )
+
+
+def _escape_reserved_name(stem: str) -> str:
+    """Обойти зарезервированные имена Windows (``prn``, ``con``, ``aux``…).
+
+    На Windows такой файл создать нельзя — имя получает префикс ``_``
+    (``prn`` → ``_prn``). На Linux и macOS имена не трогаются: ``prn``
+    остаётся ``prn``.
+    """
+    if sys.platform != "win32":
+        return stem
+    if stem.split(".")[0].upper() in _RESERVED_STEMS:
+        return "_" + stem
+    return stem
 
 
 def save_note(text: str, notes_dir: PathLike) -> Optional[Path]:
@@ -179,8 +191,7 @@ def save_note_file(
         stem = stem[:-3].strip(". ")
         if not stem:  # пользователь ввёл просто «.md»
             stem = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    if stem.split(".")[0].upper() in _RESERVED_STEMS:
-        stem = "_" + stem  # Windows не даёт файлы вида CON.md, AUX.md…
+    stem = _escape_reserved_name(stem)  # в Windows нельзя файлы CON.md, PRN.md…
 
     directory = Path(notes_dir).expanduser()
     directory.mkdir(parents=True, exist_ok=True)

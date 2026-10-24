@@ -152,7 +152,9 @@ The **“Settings…”** item in the tray menu:
 * **Default file name** — a template for the “File name” field (same
   placeholders, including `{text:90}` — the first 90 characters of the
   note text; the name is normalized: forbidden characters and line
-  breaks are replaced, the edges are trimmed and the length is capped).
+  breaks are replaced, the edges are trimmed and the length is capped;
+  Windows-reserved names (`prn`, `con`…) get a `_` prefix — on Windows
+  only).
   While the template is set, the name no longer follows the title
   automatically.
 * **Note text template** — wraps the typed text on save: `{text}` is

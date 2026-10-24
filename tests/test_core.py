@@ -572,6 +572,24 @@ def test_name_autocomplete() -> None:
     assert filter_name_choices(choices, "нет") == []
 
 
+def test_reserved_names() -> None:
+    """Имя prn остаётся prn: правка зарезервированных имён — только Windows."""
+    import sys
+
+    from markclip.notes import _safe_attachment_stem, save_note_file
+
+    if sys.platform == "win32":
+        assert _safe_attachment_stem("prn") == "_prn"
+    else:
+        assert _safe_attachment_stem("prn") == "prn"
+        assert _safe_attachment_stem("PRN") == "PRN"
+        assert _safe_attachment_stem("con") == "con"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = save_note_file(Path(tmp), "text", title="", name="prn")
+            assert path == Path(tmp) / "prn.md"
+            assert path.read_text(encoding="utf-8") == "text\n"
+
+
 TESTS = (
     test_hotkey_normalize,
     test_hotkey_display,
@@ -586,6 +604,7 @@ TESTS = (
     test_note_attachment,
     test_assets_dir_template,
     test_name_autocomplete,
+    test_reserved_names,
     test_i18n,
     test_i18n_keys,
     test_icon,
