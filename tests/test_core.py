@@ -559,6 +559,19 @@ def test_template_conditional() -> None:
     )
 
 
+def test_name_autocomplete() -> None:
+    """Автопоиск по именам файлов: фильтр по подстроке, сначала префиксы."""
+    from markclip.gui import filter_name_choices
+
+    choices = ["Проект", "Входящее", "Проект-план", "2026-10-23"]
+    assert filter_name_choices(choices, "") == choices
+    # совпадение без учёта регистра, имена с префиксом — вперёд
+    assert filter_name_choices(choices, "про") == ["Проект", "Проект-план"]
+    assert filter_name_choices(choices, "ект") == ["Проект", "Проект-план"]
+    assert filter_name_choices(choices, "ход") == ["Входящее"]
+    assert filter_name_choices(choices, "нет") == []
+
+
 TESTS = (
     test_hotkey_normalize,
     test_hotkey_display,
@@ -572,6 +585,7 @@ TESTS = (
     test_name_from_text_template,
     test_note_attachment,
     test_assets_dir_template,
+    test_name_autocomplete,
     test_i18n,
     test_i18n_keys,
     test_icon,

@@ -62,6 +62,25 @@ def create_root() -> tk.Tk:
         return tk.Tk()
 
 
+def filter_name_choices(choices: list, needle: str) -> list:
+    """Отфильтровать имена файлов по подстроке (без учёта регистра).
+
+    Пустой запрос — весь список. Сначала имена с совпадением в начале,
+    затем совпадения в середине; внутри групп более короткие имена идут
+    раньше — по ним удобнее автодополнять.
+    """
+    text = (needle or "").strip().lower()
+    if not text:
+        return list(choices)
+    starts = [name for name in choices if name.lower().startswith(text)]
+    inside = [
+        name
+        for name in choices
+        if text in name.lower() and not name.lower().startswith(text)
+    ]
+    return sorted(starts, key=len) + sorted(inside, key=len)
+
+
 def parse_drop_paths(data: str) -> List[str]:
     """Разобрать данные события ``<<Drop>>`` (tkdnd) в список путей.
 
@@ -298,6 +317,9 @@ class NoteWindow:
         self._pending_files: list = []
         self._preview_photos: list = []  # ссылки, чтобы Tk не удалил превью
         self._renamed: list = []  # пары (ожидалось, фактически сохранено)
+        # список существующих имён файлов для автопоиска в поле имени
+        self._name_choices: list = []
+        self._name_choice_index = -1
         # последнее имя, подставленное автоматически из заголовка: пока
         # пользователь не правит имя вручную, оно следует за заголовком
         self._auto_name = ""
@@ -342,7 +364,13 @@ class NoteWindow:
         self.name_entry = ttk.Combobox(row_name, textvariable=self.name_var)
         self.name_entry.pack(fill="x")
         self.name_entry.bind("<<ComboboxSelected>>", self._on_name_selected)
-        # список открывается только по стрелке в поле (или клавише Down);
+        # автопоиск: набор букв фильтрует список и дополняет имя,
+        # стрелки вверх/вниз ходят по найденным файлам, Enter берёт файл
+        self.name_entry.bind("<KeyRelease>", self._on_name_typing)
+        self.name_entry.bind("<Key-Down>", self._on_name_down)
+        self.name_entry.bind("<Key-Up>", self._on_name_up)
+        self.name_entry.bind("<Key-Return>", self._on_name_return)
+        # список открывается по стрелке в поле, набору букв или Down;
         # его <Map> по умолчанию делает focus -force на себя и берёт grab —
         # тогда печатать в окне нельзя. Отпускаем grab сразу после раскрытия
         # и оставляем ввод тому, у кого он был: набирать имя файла или текст
@@ -393,12 +421,13 @@ class NoteWindow:
         self.hint.pack(anchor="w", pady=(6, 0))
 
         self.text.bind("<<Modified>>", self._on_modified)
-        # печатать начали — список файлов больше не нужен, закрываем
-        self.text.bind("<KeyPress>", self._close_name_choices)
+        # печатать начали — список файлов больше не нужен, закрываем;
+        # <KeyRelease> — единственная форма, надёжно срабатывающая в Tk 9
+        self.text.bind("<KeyRelease>", self._close_name_choices)
         self.title_entry.bind("<KeyRelease>", self._on_title_changed)
         self.title_entry.bind("<<Paste>>", self._on_title_changed)
         root.bind("<Control-Return>", self._on_ctrl_enter)
-        root.bind("<Escape>", self._on_escape)
+        root.bind("<Key-Escape>", self._on_escape)
 
         # Правка полей задаётся явно: в Tk 9 на X11 у Ctrl+C/X/V/A нет
         # дефолтных классовых привязок. Плюс контекстное меню по правому
@@ -413,7 +442,7 @@ class NoteWindow:
             widget.bind("<Shift-Insert>", self._on_paste)
             widget.bind("<Control-a>", self._on_select_all)
             widget.bind("<Button-3>", self._on_context)
-            widget.bind("<Menu>", self._on_context)
+            widget.bind("<Key-Menu>", self._on_context)
             widget.bind("<Shift-F10>", self._on_context)
 
         # файлы, перетащенные из файлового менеджера, — вложения заметки
@@ -442,7 +471,7 @@ class NoteWindow:
         """Обновить список существующих заметок для поля имени файла.
 
         Значения — имена ``*.md`` из папки заметок (новые сверху);
-        список ограничен, чтобы не раздувать выпадающее окно.
+        список ограничивается при показе, чтобы не раздувать окно.
         """
         values = []
         try:
@@ -460,13 +489,143 @@ class NoteWindow:
                 )
         except Exception:  # noqa: BLE001
             log.debug("Не удалось прочитать список заметок", exc_info=True)
+        self._name_choices = values
+        self._name_choice_index = -1
         try:
             self.name_entry["values"] = values[:300]
         except tk.TclError:
             pass
 
+    # ------------------------------------------------------------------
+    # Автопоиск по именам файлов: набор, стрелки, выбор
+    # ------------------------------------------------------------------
+    def _on_name_typing(self, event) -> None:
+        """Набор в поле имени: фильтруем список и дополняем имя."""
+        if event.keysym in ("BackSpace", "Delete"):
+            # после удаления — только фильтр, без дополнения
+            self._filter_name_choices(self.name_var.get(), complete=False)
+            return
+        if not (event.char and event.char.isprintable()):
+            return  # навигация, модификаторы, Enter/Tab — список не трогаем
+        self._filter_name_choices(self.name_var.get(), complete=True)
+
+    def _filter_name_choices(self, typed: str, complete: bool = True) -> None:
+        """Показать в списке совпадения и (опционально) дополнить имя."""
+        matches = filter_name_choices(self._name_choices, typed)
+        self._name_choice_index = -1
+        try:
+            self.name_entry["values"] = matches[:300]
+            if not matches:
+                self._close_name_choices()
+                return
+            if complete:
+                needle = (typed or "").strip().lower()
+                first = matches[0]
+                if needle and first.lower().startswith(needle) and first.lower() != needle:
+                    # хвост выделен — следующие буквы заменят его
+                    self.name_var.set(first)
+                    self.name_entry.selection_range(len(typed), "end")
+                    self.name_entry.icursor("end")
+            self._open_name_choices()
+        except tk.TclError:
+            log.debug("Автопоиск имени не сработал", exc_info=True)
+
+    def _name_listbox(self) -> Optional[str]:
+        """Путь listbox'а раскрытого списка файлов; список закрыт — ``None``."""
+        try:
+            popdown = self.name_entry.tk.eval(
+                "ttk::combobox::PopdownWindow " + str(self.name_entry)
+            )
+            if self.name_entry.tk.call("winfo", "viewable", popdown) != 1:
+                return None
+            return popdown + ".f.l"
+        except tk.TclError:
+            return None
+
+    def _open_name_choices(self) -> None:
+        """Раскрыть список файлов (grab отпускает биндинг <Map>)."""
+        try:
+            self.name_entry.tk.call(
+                "ttk::combobox::Post", str(self.name_entry)
+            )
+        except tk.TclError:
+            pass
+
+    def _move_name_choice(self, step: int) -> str:
+        """Сдвинуть выбор в списке файлов и показать его в поле имени."""
+        values = list(self.name_entry["values"])
+        if not values:
+            return ""
+        index = max(0, min(len(values) - 1, self._name_choice_index + step))
+        self._name_choice_index = index
+        name = values[index]
+        try:
+            self.name_var.set(name)
+            self.name_entry.icursor("end")
+            self.name_entry.selection_range(0, "end")  # набор заменит выбор
+            lb = self._name_listbox()
+            if lb:
+                tk_call = self.name_entry.tk.call
+                tk_call(lb, "selection", "clear", 0, "end")
+                tk_call(lb, "selection", "set", index)
+                tk_call(lb, "activate", index)
+                tk_call(lb, "see", index)
+        except tk.TclError:
+            log.debug("Навигация по списку файлов не сработала", exc_info=True)
+        return name
+
+    def _accept_name_choice(self) -> bool:
+        """Взять подсвеченный файл из списка (Enter)."""
+        lb = self._name_listbox()
+        if lb is None:
+            return False
+        values = list(self.name_entry["values"])
+        if not values:
+            return False
+        index = max(0, min(len(values) - 1, self._name_choice_index))
+        self.name_var.set(values[index])
+        self._on_name_selected()
+        return True
+
+    def _sync_name_index(self) -> None:
+        """Текущий индекс в списке — по значению в поле (старт для стрелок)."""
+        values = list(self.name_entry["values"])
+        current = self.name_var.get()
+        self._name_choice_index = (
+            values.index(current) if current in values else -1
+        )
+
+    def _on_name_down(self, event):
+        """Стрелка вниз: раскрыть список или шагнуть к следующему файлу."""
+        if self._name_listbox() is None:
+            self._filter_name_choices(self.name_var.get(), complete=False)
+            if not self.name_entry["values"]:
+                return "break"
+        if self._name_choice_index < 0:
+            self._sync_name_index()
+        self._move_name_choice(1)
+        return "break"
+
+    def _on_name_up(self, event):
+        """Стрелка вверх: шагнуть к предыдущему файлу."""
+        if self._name_listbox() is None:
+            return "break"
+        if self._name_choice_index < 0:
+            self._sync_name_index()
+        self._move_name_choice(-1)
+        return "break"
+
+    def _on_name_return(self, event):
+        """Enter в поле имени: взять файл из списка; Ctrl+Enter — сохранить."""
+        if event.state & 0x0004:  # Ctrl — пусть сработает сохранение заметки
+            return None
+        if self._accept_name_choice():
+            return "break"
+        return None
+
     def _close_name_choices(self, _event=None) -> None:
         """Закрыть список файлов (безопасно, если он уже закрыт)."""
+        self._name_choice_index = -1
         try:
             self.name_entry.tk.call(
                 "ttk::combobox::Unpost", str(self.name_entry)
@@ -1147,7 +1306,7 @@ class SettingsWindow:
         )
         self.text_template_text.insert("1.0", text_template)
         self.text_template_text.pack(side="left", fill="both", expand=True)
-        self.text_template_text.bind("<Return>", self._text_template_return)
+        self.text_template_text.bind("<Key-Return>", self._text_template_return)
 
         row5 = ttk.Frame(frame)
         row5.pack(fill="x", pady=(0, 4))
@@ -1237,8 +1396,8 @@ class SettingsWindow:
             side="right", padx=(0, 8)
         )
 
-        win.bind("<Escape>", lambda _event: self.close())
-        win.bind("<Return>", lambda _event: self._save())
+        win.bind("<Key-Escape>", lambda _event: self.close())
+        win.bind("<Key-Return>", lambda _event: self._save())
 
         self._center()
 
