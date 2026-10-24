@@ -18,8 +18,10 @@ from .notes import (
     IMAGES_SUBDIR,
     attach_note_file,
     attachment_dest,
+    attachment_file_name,
     escape_link_text,
     normalize_subdir,
+    render_assets_dir,
     sanitize_file_name,
     save_note_image,
 )
@@ -224,11 +226,14 @@ class NoteWindow:
         self.templates_provider = templates_provider
         self.assets_provider = assets_provider
         self.link_style_provider = link_style_provider
-        # картинки, вставленные, но ещё не сохранённые на диск:
-        # (имя файла, PNG-байты) — файлы пишутся только по ОК
+        # вложения, добавленные в заметку, но ещё не записанные на диск:
+        # (имя файла, PNG-байты, ожидаемая ссылка) у картинок из буфера и
+        # (путь источника, ожидаемая ссылка) у перетащенных файлов —
+        # копируются только по ОК, когда известно финальное имя заметки
         self._pending_images: list = []
+        self._pending_files: list = []
         self._preview_photos: list = []  # ссылки, чтобы Tk не удалил превью
-        self._renamed: dict = {}  # «ожидалось» → «фактически сохранено»
+        self._renamed: list = []  # пары (ожидалось, фактически сохранено)
         # последнее имя, подставленное автоматически из заголовка: пока
         # пользователь не правит имя вручную, оно следует за заголовком
         self._auto_name = ""
@@ -482,29 +487,28 @@ class NoteWindow:
         log.debug("Перетаскивание файлов в окно заметки включено")
 
     def _on_drop(self, event) -> None:
-        """Файлы перетащили в окно — копируем вложения и вставляем ссылки.
+        """Файлы перетащили в окно — готовим вложения и вставляем ссылки.
 
-        Картинки вставляются как ``![изображение](assets/файл)`` — так же,
-        как при вставке из буфера; остальные файлы становятся обычными
-        ссылками на своё вложение в папке ``assets``.
+        Файлы копируются в папку вложений по нажатию ОК — так же, как
+        картинки из буфера: папка может содержать ``{$notename}``, а имя
+        заметки становится известно только при сохранении. Картинки
+        вставляются как ``![изображение](assets/файл)`` (с превью),
+        остальные файлы — обычной ссылкой на своё вложение.
         """
-        notes_dir = (
-            self.notes_dir_provider() if self.notes_dir_provider else None
-        )
-        if not notes_dir:
-            log.debug("Бросили файлы, но папка заметок не выбрана")
-            return
-        subdir = self._assets_subdir()
+        subdir = self._attachment_subdir()
         style = self._link_style()
         links = []
         for path in parse_drop_paths(getattr(event, "data", "")):
-            relative = attach_note_file(notes_dir, path, subdir, style)
-            if not relative:
+            source = Path(path)
+            if not source.is_file():
                 log.debug("Брошенный файл пропущен: %s", path)
                 continue
-            log.debug("Брошенный файл %s → вложение %s", path, relative)
-            source = Path(path)
-            dest = attachment_dest(relative, style)
+            expected = "{}/{}".format(
+                subdir, attachment_file_name(source, style)
+            )
+            self._pending_files.append((str(source), expected))
+            log.debug("Брошенный файл %s → вложение %s (по ОК)", path, expected)
+            dest = attachment_dest(expected, style)
             if source.suffix.lower().lstrip(".") in IMAGE_EXTENSIONS:
                 links.append(
                     "\n![{}]({})\n".format(tr("изображение"), dest)
@@ -565,17 +569,16 @@ class NoteWindow:
                 return "break"
             data, ext = image
             name = "{}.{}".format(datetime.now().strftime("%Y-%m-%d_%H%M%S"), ext)
-            self._pending_images.append((name, data))
+            # в текст попадает Markdown-ссылка — по ней картинка будет найдена;
+            # ожидаемый путь запоминается, фактический станет известен по ОК
+            expected = "{}/{}".format(self._attachment_subdir(), name)
+            self._pending_images.append((name, data, expected))
             self._insert_image_preview(data)
-            # в текст попадает Markdown-ссылка — по ней картинка будет найдена
-            subdir = self._assets_subdir()
             self.text.insert(
                 "insert",
                 "\n![{}]({})\n".format(
                     tr("изображение"),
-                    attachment_dest(
-                        "{}/{}".format(subdir, name), self._link_style()
-                    ),
+                    attachment_dest(expected, self._link_style()),
                 ),
             )
             try:
@@ -790,22 +793,24 @@ class NoteWindow:
             pass
 
     def submit(self) -> None:
-        """Отправить текст на сохранение (сначала — картинки, если были)."""
+        """Отправить текст на сохранение (сначала — вложения, если были)."""
         content = self.text.get("1.0", "end-1c")
-        if self._pending_images:
-            error = self._save_pending_images()
-            if error:
-                self.status.config(text=error)
-                self.text.focus_set()
-                return
-            content = self._fix_image_refs(content)
-        # шаблоны с {text…}/{url1} применяются здесь — текст уже введён
+        # шаблоны с {text…}/{url1} применяются здесь — текст уже введён;
+        # имя/заголовок считаются до записи вложений: папка вложений
+        # может содержать {$notename} — имя заметки
         title = self.title_var.get()
         name = self.name_var.get()
         if self._deferred_title and self._title_template and not title.strip():
             title = render_template(self._title_template, text=content).strip()
         if self._deferred_name and self._name_template and not name.strip():
             name = render_template(self._name_template, text=content)
+        if self._pending_images or self._pending_files:
+            error = self._save_pending_attachments(name, title)
+            if error:
+                self.status.config(text=error)
+                self.text.focus_set()
+                return
+            content = self._fix_attachment_refs(content)
         if self._text_template:
             content = render_note_body(self._text_template, content)
         try:
@@ -819,6 +824,7 @@ class NoteWindow:
             return
         self.status.config(text="")
         self._pending_images.clear()
+        self._pending_files.clear()
         self._preview_photos.clear()
         self._renamed.clear()
         self.text.delete("1.0", "end")
@@ -879,32 +885,68 @@ class NoteWindow:
     # ------------------------------------------------------------------
     # Картинки из буфера
     # ------------------------------------------------------------------
-    def _save_pending_images(self) -> Optional[str]:
-        """Записать вставленные картинки в папку assets/ заметок.
+    def _save_pending_attachments(
+        self, name: str, title: str
+    ) -> Optional[str]:
+        """Записать вложения (картинки и файлы) в папку вложений заметки.
 
         Возвращает сообщение об ошибке или ``None``. Файлы пишутся только
         здесь — по нажатию ОК; при Esc или закрытии окна ничего не создаётся.
+        Папка вычисляется по финальному имени заметки, поэтому подстановка
+        ``{$notename}`` работает и для имени, посчитанного из шаблона.
         """
         notes_dir = self.notes_dir_provider() if self.notes_dir_provider else None
         if not notes_dir:
             return tr("Не задана папка для заметок — вставьте картинку текстом")
-        subdir = self._assets_subdir()
+        subdir = render_assets_dir(
+            self._assets_subdir(), self._note_name(name, title)
+        )
         self._renamed.clear()
-        for name, data in self._pending_images:
+        for file_name, data, expected in self._pending_images:
             try:
-                relative = save_note_image(notes_dir, name, data, subdir)
+                relative = save_note_image(notes_dir, file_name, data, subdir)
             except OSError:
-                log.exception("Не удалось сохранить картинку %s", name)
+                log.exception("Не удалось сохранить картинку %s", file_name)
                 return tr("Не удалось сохранить картинку (подробности в журнале)")
-            expected = "{}/{}".format(subdir, name)
-            if relative != expected:
-                # файл попал под новое имя (защита от перезаписи или другая
-                # папка вложений) — запомним, чтобы поправить ссылку в тексте
-                self._renamed[expected] = relative
+            # фактический путь может отличаться (защита от перезаписи,
+            # другая папка вложений) — ссылку в тексте поправим
+            self._renamed.append((expected, relative))
+        for source, expected in self._pending_files:
+            relative = attach_note_file(
+                notes_dir, source, subdir, self._link_style()
+            )
+            if not relative:
+                log.error("Не удалось сохранить вложение %s", source)
+                return tr("Не удалось сохранить вложение (подробности в журнале)")
+            self._renamed.append((expected, relative))
         return None
 
+    @staticmethod
+    def _note_name(name: str, title: str) -> str:
+        """Имя заметки (файл .md без расширения) для подстановки ``{$notename}``."""
+        for value in (name, title):
+            stem = sanitize_file_name((value or "").strip()).strip(". ")
+            if stem:
+                return (
+                    stem[:-3].strip(". ")
+                    if stem.lower().endswith(".md")
+                    else stem
+                )
+        return datetime.now().strftime("%Y-%m-%d")  # дневная заметка
+
+    def _attachment_subdir(self) -> str:
+        """Путь папки вложений для текущей заметки (с ``{$notename}``)."""
+        return render_assets_dir(
+            self._assets_subdir(),
+            self._note_name(self.name_var.get(), self.title_var.get()),
+        )
+
     def _assets_subdir(self) -> str:
-        """Текущее имя подпапки вложений из настроек (пусто/мусор → assets)."""
+        """Шаблон пути вложений из настроек (пусто/мусор → assets).
+
+        Может содержать подстановку ``{$notename}`` — имя заметки;
+        её рендерит :meth:`_attachment_subdir`.
+        """
         if self.assets_provider:
             try:
                 return normalize_subdir(self.assets_provider())
@@ -921,10 +963,14 @@ class NoteWindow:
                 log.debug("Стиль ссылок недоступен", exc_info=True)
         return "plain"
 
-    def _fix_image_refs(self, content: str) -> str:
-        """Подставить в тексте фактические имена файлов картинок."""
-        for expected, actual in self._renamed.items():
-            content = content.replace(expected, actual)
+    def _fix_attachment_refs(self, content: str) -> str:
+        """Подставить в тексте фактические пути вложений.
+
+        Каждая пара (ожидалось, фактически) закрывает одно вхождение —
+        так два броска одного файла получают разные ссылки.
+        """
+        for expected, actual in self._renamed:
+            content = content.replace(expected, actual, 1)
         return content
 
 
@@ -1081,8 +1127,9 @@ class SettingsWindow:
                 "Шаблон текста заметки оборачивает введённый текст: "
                 "{text} — сам текст; без него текст дописывается в конец. "
                 "Пустой шаблон — текст без изменений.\n"
-                "Папка вложений — имя подпапки внутри папки заметок для картинок "
-                "из буфера (по умолчанию assets)."
+                "Папка вложений — подпапка внутри папки заметок (по умолчанию "
+                "assets); подстановка {$notename} даёт имя заметки: "
+                "assets/{$notename} — вложения в подпапке с именем заметки."
             ),
             foreground=_MUTED_COLOR,
             justify="left",

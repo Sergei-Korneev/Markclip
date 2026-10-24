@@ -184,7 +184,7 @@ def test_notes_image() -> None:
     assert normalize_subdir("") == IMAGES_SUBDIR
     assert normalize_subdir("   ") == IMAGES_SUBDIR
     assert normalize_subdir(" вложения ") == "вложения"
-    assert normalize_subdir("a/b") == "a_b"  # разделители путей вычищаются
+    assert normalize_subdir("a/b") == "a/b"  # путь из сегментов сохраняется
     assert normalize_subdir("..") == IMAGES_SUBDIR
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -482,6 +482,40 @@ def test_note_attachment() -> None:
     assert parse_drop_paths("") == []
 
 
+def test_assets_dir_template() -> None:
+    """Путь папки вложений с подстановкой {$notename} — имени заметки."""
+    from pathlib import Path
+
+    from markclip.notes import (
+        NOTE_NAME_PLACEHOLDER,
+        attachment_file_name,
+        normalize_subdir,
+        render_assets_dir,
+    )
+
+    assert NOTE_NAME_PLACEHOLDER == "{$notename}"
+    # шаблон проходит нормализацию как есть (путь из нескольких сегментов)
+    assert normalize_subdir("assets/{$notename}") == "assets/{$notename}"
+    assert normalize_subdir("assets//{$notename}/") == "assets/{$notename}"
+    # мусорные сегменты отбрасываются
+    assert normalize_subdir("a//./b") == "a/b"
+    assert normalize_subdir("../x") == "x"
+
+    # подстановка имени заметки; имя вычищается вместе с сегментом
+    assert render_assets_dir("assets/{$notename}", "My note") == "assets/My note"
+    assert render_assets_dir("assets/{$notename}", "a/b") == "assets/a_b"
+    # имя неизвестно — сегмент пропадает; пустой шаблон — assets
+    assert render_assets_dir("assets/{$notename}", "") == "assets"
+    assert render_assets_dir("", "Note") == "assets"
+
+    # имя файла вложения чистится по стилю ссылок
+    assert attachment_file_name(Path("report (final).pdf")) == "report _final_.pdf"
+    assert (
+        attachment_file_name(Path("report (final).pdf"), "angle")
+        == "report (final).pdf"
+    )
+
+
 TESTS = (
     test_hotkey_normalize,
     test_hotkey_display,
@@ -493,6 +527,7 @@ TESTS = (
     test_note_body_template,
     test_name_from_text_template,
     test_note_attachment,
+    test_assets_dir_template,
     test_i18n,
     test_i18n_keys,
     test_icon,

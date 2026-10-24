@@ -157,8 +157,10 @@ The **“Settings…”** item in the tray menu:
   has no `{text}`, the text is appended at the end. Leave empty
   (the default) and the text is saved as-is — no time is put into
   the note body.
-* **Attachments folder** — the name of the subfolder inside the notes
-  folder where clipboard images are stored (default `assets`);
+* **Attachments folder** — the subfolder inside the notes folder where
+  attachments are copied (default `assets`). The `{$notename}` placeholder
+  (the note name) is supported: `assets/{$notename}` stores attachments
+  in a subfolder named after the note;
 * **Attachment links** — how attachment links are written into the note
   text: **plain** `[text](path)` (file names are cleaned of `()[]`, `#`
   and `%` so the link never breaks) or **angle brackets** `[text](<path>)`

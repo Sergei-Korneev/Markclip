@@ -20,14 +20,17 @@ log = logging.getLogger(__name__)
 __all__ = [
     "IMAGES_SUBDIR",
     "LINK_STYLES",
+    "NOTE_NAME_PLACEHOLDER",
     "save_note",
     "save_note_file",
     "save_note_image",
     "attach_note_file",
     "attachment_dest",
+    "attachment_file_name",
     "escape_link_text",
-    "sanitize_file_name",
     "normalize_subdir",
+    "render_assets_dir",
+    "sanitize_file_name",
     "open_folder",
 ]
 
@@ -83,7 +86,11 @@ def _safe_attachment_stem(name: str, link_style: str = "plain") -> str:
     for char in unsafe:
         cleaned = cleaned.replace(char, "_")
     cleaned = re.sub(r"_{2,}", "_", cleaned).strip(". ")
-    return cleaned or datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    if not cleaned:
+        return datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    if cleaned.split(".")[0].upper() in _RESERVED_STEMS:
+        cleaned = "_" + cleaned  # Windows не даёт файлы вида CON.pdf, AUX.pdf…
+    return cleaned
 
 #: Имена, зарезервированные Windows (к ним нельзя обращаться как к файлу).
 _RESERVED_STEMS = frozenset(
@@ -202,14 +209,48 @@ def save_note_file(
     return path
 
 
-def normalize_subdir(subdir: str) -> str:
-    """Имя подпапки вложений: одно имя каталога, без путей; пусто → assets.
+#: Подстановка в пути папки вложений: имя заметки (файл .md без расширения).
+#: Пример: ``assets/{$notename}`` — вложения в подпапке с именем заметки.
+NOTE_NAME_PLACEHOLDER = "{$notename}"
 
-    Запрещённые символы вычищаются, ``.``/``..`` и пустота приводятся
-    к значению по умолчанию ``assets``.
+
+def normalize_subdir(subdir: str) -> str:
+    """Путь подпапки вложений: сегменты через «/»; пусто → ``assets``.
+
+    Запрещённые символы в сегментах вычищаются, пустые сегменты и ``.``/``..``
+    отбрасываются. Подстановка :data:`NOTE_NAME_PLACEHOLDER` сохраняется
+    как есть — её рендерит :func:`render_assets_dir`.
     """
-    cleaned = sanitize_file_name(subdir or "")
-    return cleaned or IMAGES_SUBDIR
+    segments = []
+    for part in (subdir or "").replace("\\", "/").split("/"):
+        if part == NOTE_NAME_PLACEHOLDER:
+            segments.append(part)  # подстановка имени заметки — не трогаем
+            continue
+        cleaned = sanitize_file_name(part).strip(". ")
+        if cleaned:
+            segments.append(cleaned)
+    return "/".join(segments) or IMAGES_SUBDIR
+
+
+def render_assets_dir(assets_dir: str, note_name: str = "") -> str:
+    """Путь папки вложений с подстановкой имени заметки.
+
+    ``assets/{$notename}`` + «Моя заметка» → ``assets/Моя заметка``.
+    Имя заметки вычищается вместе с сегментами; если имя неизвестно,
+    подстановка даёт пустой сегмент (``assets/{$notename}`` → ``assets``).
+    """
+    clean_name = sanitize_file_name(note_name or "").strip(". ")
+    rendered = (assets_dir or "").replace(NOTE_NAME_PLACEHOLDER, clean_name)
+    return normalize_subdir(rendered)
+
+
+def attachment_file_name(source: PathLike, link_style: str = "plain") -> str:
+    """Имя файла вложения (с расширением) — каким оно станет в папке.
+
+    Источник: :func:`_safe_attachment_stem` + расширение в нижнем регистре.
+    """
+    src = Path(source)
+    return _safe_attachment_stem(src.stem, link_style) + src.suffix.lower()
 
 
 def attach_note_file(
@@ -236,8 +277,6 @@ def attach_note_file(
     directory.mkdir(parents=True, exist_ok=True)
 
     stem = _safe_attachment_stem(src.stem, link_style)
-    if stem.split(".")[0].upper() in _RESERVED_STEMS:
-        stem = "_" + stem  # Windows не даёт файлы вида CON.pdf, AUX.pdf…
     suffix = src.suffix.lower()
 
     target = directory / (stem + suffix)
